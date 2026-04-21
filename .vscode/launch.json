@@ -1,0 +1,25 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Flutter Supabase",
+      "request": "launch",
+      "type": "dart",
+      "flutterMode": "debug",
+      "toolArgs": [
+        "--dart-define=APP_USE_FAKE_BACKEND=false",
+        "--dart-define=NEXT_PUBLIC_SUPABASE_URL=https://cirbtiruwefyhqthbcyc.supabase.co",
+        "--dart-define=NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_y7kJZxrpoBBmBSesZv1xpQ_OhqcPvpV"
+      ]
+    },
+    {
+      "name": "Flutter Demo",
+      "request": "launch",
+      "type": "dart",
+      "flutterMode": "debug",
+      "toolArgs": [
+        "--dart-define=APP_USE_FAKE_BACKEND=true"
+      ]
+    }
+  ]
+}
