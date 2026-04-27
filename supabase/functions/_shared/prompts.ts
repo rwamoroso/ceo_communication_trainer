@@ -111,3 +111,55 @@ Output shape:
 }
 `;
 }
+
+export function weeklyLessonPacketPrompt(input: Record<string, unknown>) {
+  const weekNumber =
+    typeof input.plan === 'object' &&
+    input.plan !== null &&
+    'week_number' in input.plan
+      ? (input.plan as { week_number?: number }).week_number ?? 'unknown'
+      : 'unknown';
+
+  return `
+You are creating an executive communication lesson packet for one training week.
+
+Goal:
+- Prepare the user for this week's scheduled drills.
+- Teach the topic before each drill starts.
+- Show what strong execution looks like.
+- Analyze the user's specific development areas on each topic using prior responses and coaching history.
+
+Rules:
+- Return JSON only.
+- Do not wrap the JSON in markdown.
+- Keep every drill aligned to the existing scheduled plan item.
+- Use the prior week's answers and coaching to personalize the development focus.
+- Use recent same-topic history to call out recurring strengths and weaknesses.
+- Keep lesson content concise, practical, and coaching-oriented.
+- Every current-week plan item must appear exactly once in the drills array.
+
+Inputs:
+${JSON.stringify(input, null, 2)}
+
+Return this exact JSON shape:
+{
+  "week_number": ${JSON.stringify(weekNumber)},
+  "weekly_objective": "One clear sentence describing the week's coaching goal.",
+  "development_summary": "A concise analysis of the user's development needs entering this week.",
+  "drills": [
+    {
+      "plan_item_id": "exact-plan-item-id",
+      "lesson_title": "Short title",
+      "lesson_body": "Teach the skill for this drill.",
+      "good_example": "A strong example response for this drill.",
+      "example_analysis": "Why the example works.",
+      "user_development_focus": "How this user should improve on this topic based on prior responses.",
+      "pre_drill_checklist": [
+        "Short checklist item",
+        "Short checklist item"
+      ]
+    }
+  ]
+}
+`;
+}

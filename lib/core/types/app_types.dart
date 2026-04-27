@@ -72,6 +72,16 @@ extension PillarX on Pillar {
 }
 
 extension PromptCategoryX on PromptCategory {
+  String get code => switch (this) {
+    PromptCategory.blufStructuredThinking => 'bluf_structured_thinking',
+    PromptCategory.directAnswerDiscipline => 'direct_answer_discipline',
+    PromptCategory.brevityCompression => 'brevity_compression',
+    PromptCategory.executivePresence => 'executive_presence',
+    PromptCategory.strategicFraming => 'strategic_framing',
+    PromptCategory.pressureResponse => 'pressure_response',
+    PromptCategory.listeningSummarization => 'listening_summarization',
+  };
+
   String get label => switch (this) {
     PromptCategory.blufStructuredThinking => 'BLUF / Structure',
     PromptCategory.directAnswerDiscipline => 'Direct answer',
@@ -84,11 +94,34 @@ extension PromptCategoryX on PromptCategory {
 }
 
 extension RecalibrationStateX on RecalibrationState {
+  String get code => switch (this) {
+    RecalibrationState.accelerating => 'accelerating',
+    RecalibrationState.stable => 'stable',
+    RecalibrationState.plateau => 'plateau',
+    RecalibrationState.regressing => 'regressing',
+  };
+
   String get label => switch (this) {
     RecalibrationState.accelerating => 'Accelerating',
     RecalibrationState.stable => 'Stable',
     RecalibrationState.plateau => 'Plateau',
     RecalibrationState.regressing => 'Regressing',
+  };
+}
+
+extension PlanItemStatusX on PlanItemStatus {
+  String get code => switch (this) {
+    PlanItemStatus.scheduled => 'scheduled',
+    PlanItemStatus.completed => 'completed',
+    PlanItemStatus.missed => 'missed',
+    PlanItemStatus.skipped => 'skipped',
+  };
+
+  String get label => switch (this) {
+    PlanItemStatus.scheduled => 'Scheduled',
+    PlanItemStatus.completed => 'Completed',
+    PlanItemStatus.missed => 'Missed',
+    PlanItemStatus.skipped => 'Skipped',
   };
 }
 

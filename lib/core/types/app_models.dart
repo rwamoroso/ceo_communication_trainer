@@ -206,6 +206,79 @@ class TrainingPlan {
   }
 }
 
+class WeeklySessionEvaluation {
+  const WeeklySessionEvaluation({
+    required this.sessionId,
+    required this.aiScore,
+    required this.keyObservations,
+  });
+
+  final String sessionId;
+  final double aiScore;
+  final List<String> keyObservations;
+}
+
+class WeeklyDrillLesson {
+  const WeeklyDrillLesson({
+    required this.planItemId,
+    required this.lessonTitle,
+    required this.lessonBody,
+    required this.goodExample,
+    required this.exampleAnalysis,
+    required this.userDevelopmentFocus,
+    required this.preDrillChecklist,
+    this.aiScenarioContext,
+    this.aiPromptText,
+  });
+
+  final String planItemId;
+  final String lessonTitle;
+  final String lessonBody;
+  final String goodExample;
+  final String exampleAnalysis;
+  final String userDevelopmentFocus;
+  final List<String> preDrillChecklist;
+  final String? aiScenarioContext;
+  final String? aiPromptText;
+}
+
+class WeeklyLessonPacket {
+  const WeeklyLessonPacket({
+    required this.id,
+    required this.planVersionId,
+    required this.weekNumber,
+    required this.weeklyObjective,
+    required this.developmentSummary,
+    required this.rawImportText,
+    required this.drills,
+    required this.createdAt,
+    required this.updatedAt,
+    this.previousWeekAnalysis = '',
+    this.previousWeekEvaluations = const [],
+  });
+
+  final String id;
+  final String planVersionId;
+  final int weekNumber;
+  final String weeklyObjective;
+  final String developmentSummary;
+  final String rawImportText;
+  final List<WeeklyDrillLesson> drills;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  final String previousWeekAnalysis;
+  final List<WeeklySessionEvaluation> previousWeekEvaluations;
+
+  WeeklyDrillLesson? lessonForPlanItem(String planItemId) {
+    for (final lesson in drills) {
+      if (lesson.planItemId == planItemId) {
+        return lesson;
+      }
+    }
+    return null;
+  }
+}
+
 class BehaviorMetrics {
   const BehaviorMetrics({
     required this.directAnswerRate,

@@ -7,6 +7,7 @@ import 'package:ceo_communication_trainer/features/auth/domain/auth_repository.d
 import 'package:ceo_communication_trainer/features/profile/domain/profile_repository.dart';
 import 'package:ceo_communication_trainer/features/progress/domain/progress_repository.dart';
 import 'package:ceo_communication_trainer/features/training_plan/domain/adaptive_engine.dart';
+import 'package:ceo_communication_trainer/features/training_plan/domain/weekly_lesson_packet_engine.dart';
 import 'package:ceo_communication_trainer/features/training_session/domain/scoring_engine.dart';
 import 'package:ceo_communication_trainer/features/training_session/domain/training_repository.dart';
 import 'package:ceo_communication_trainer/services/app_service.dart';
@@ -25,6 +26,7 @@ class InMemoryAppService extends AppService
   ProgressSnapshot? _progress;
   final List<TrainingSession> _sessions = [];
   final List<WeeklyRecalibration> _recalibrations = [];
+  final List<WeeklyLessonPacket> _weeklyLessonPackets = [];
 
   @override
   bool get isLoading => false;
@@ -58,6 +60,10 @@ class InMemoryAppService extends AppService
   @override
   List<WeeklyRecalibration> get recalibrations =>
       UnmodifiableListView(_recalibrations.reversed);
+
+  @override
+  List<WeeklyLessonPacket> get weeklyLessonPackets =>
+      UnmodifiableListView(_weeklyLessonPackets.reversed);
 
   @override
   DashboardSnapshot? get dashboard {
@@ -132,8 +138,18 @@ class InMemoryAppService extends AppService
     _progress = null;
     _sessions.clear();
     _recalibrations.clear();
+    _weeklyLessonPackets.clear();
     notifyListeners();
   }
+
+  @override
+  bool get isInPasswordRecovery => false;
+
+  @override
+  Future<void> sendPasswordResetEmail(String email) async {}
+
+  @override
+  Future<void> updatePassword(String newPassword) async {}
 
   @override
   Future<void> saveProfile({
@@ -227,8 +243,16 @@ class InMemoryAppService extends AppService
     final planItem = _currentPlan?.currentVersion.items.firstWhere(
       (item) => item.id == planItemId,
     );
+    if (planItem == null) {
+      throw StateError('Plan item not found.');
+    }
+    if (weeklyLessonPacketForWeek(planItem.weekNumber) == null) {
+      throw StateError(
+        'Week ${planItem.weekNumber} requires an imported AI lesson packet before drills can start.',
+      );
+    }
     final prompt = promptLibrary.firstWhere(
-      (item) => item.id == planItem!.promptId,
+      (item) => item.id == planItem.promptId,
     );
     return _createSession(
       prompt: prompt,
@@ -240,6 +264,31 @@ class InMemoryAppService extends AppService
   @override
   Future<TrainingSession> openRetrySession(String sessionId) async {
     return _sessions.firstWhere((session) => session.id == sessionId);
+  }
+
+  @override
+  WeeklyLessonPacket? weeklyLessonPacketForWeek(int weekNumber) {
+    return _weeklyLessonPackets
+        .where(
+          (packet) =>
+              _currentPlan != null &&
+              packet.planVersionId == _currentPlan!.currentVersion.id &&
+              packet.weekNumber == weekNumber,
+        )
+        .firstOrNull;
+  }
+
+  @override
+  WeeklyDrillLesson? weeklyLessonForPlanItem(String planItemId) {
+    final plan = _currentPlan;
+    if (plan == null) {
+      return null;
+    }
+    final item = plan.currentVersion.items.where((entry) => entry.id == planItemId).firstOrNull;
+    if (item == null) {
+      return null;
+    }
+    return weeklyLessonPacketForWeek(item.weekNumber)?.lessonForPlanItem(planItemId);
   }
 
   TrainingSession _createSession({
@@ -274,6 +323,11 @@ class InMemoryAppService extends AppService
       throw StateError('Session not found.');
     }
     final session = _sessions[index];
+    if (session.attempts.length >= 2) {
+      throw StateError(
+        'This session already has two attempts. Open feedback and finish the session.',
+      );
+    }
     final nextAttemptNo = session.attempts.length + 1;
     final wordCount = _wordCount(responseText);
     final estimatedDuration = max(
@@ -581,6 +635,69 @@ class InMemoryAppService extends AppService
     notifyListeners();
     return recalibration;
   }
+
+  @override
+  Future<String> buildWeeklyLessonPrompt(int weekNumber) async {
+    final plan = _currentPlan;
+    final baseline = _baselineSummary;
+    if (plan == null || baseline == null) {
+      throw StateError('A completed baseline and active plan are required.');
+    }
+    return WeeklyLessonPacketEngine.buildPrompt(
+      weekNumber: weekNumber,
+      plan: plan,
+      baseline: baseline,
+      progress: _progress,
+      sessions: _sessions,
+    );
+  }
+
+  @override
+  Future<WeeklyLessonPacket> importWeeklyLessonPacket({
+    required int weekNumber,
+    required String rawJson,
+  }) async {
+    final plan = _currentPlan;
+    if (plan == null) {
+      throw StateError('An active plan is required.');
+    }
+
+    final weekItems = plan.currentVersion.items
+        .where((item) => item.weekNumber == weekNumber)
+        .toList();
+    final validated = WeeklyLessonPacketEngine.parseImport(
+      expectedWeekNumber: weekNumber,
+      weekItems: weekItems,
+      rawJson: rawJson,
+    );
+
+    final existing = weeklyLessonPacketForWeek(weekNumber);
+    final packet = WeeklyLessonPacket(
+      id: existing?.id ?? 'lesson-$weekNumber-${DateTime.now().millisecondsSinceEpoch}',
+      planVersionId: plan.currentVersion.id,
+      weekNumber: validated.weekNumber,
+      weeklyObjective: validated.weeklyObjective,
+      developmentSummary: validated.developmentSummary,
+      rawImportText: validated.rawImportText,
+      drills: validated.drills,
+      createdAt: existing?.createdAt ?? DateTime.now(),
+      updatedAt: DateTime.now(),
+      previousWeekAnalysis: validated.previousWeekAnalysis,
+      previousWeekEvaluations: validated.previousWeekEvaluations,
+    );
+
+    _weeklyLessonPackets.removeWhere(
+      (entry) =>
+          entry.planVersionId == packet.planVersionId &&
+          entry.weekNumber == packet.weekNumber,
+    );
+    _weeklyLessonPackets.add(packet);
+    notifyListeners();
+    return packet;
+  }
+
+  @override
+  Future<void> reload() async {}
 
   double _coachingAdoptionRate() {
     final completed = _sessions.where(

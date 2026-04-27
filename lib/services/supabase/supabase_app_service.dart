@@ -5,6 +5,7 @@ import 'package:ceo_communication_trainer/app/bootstrap/app_config.dart';
 import 'package:ceo_communication_trainer/core/types/app_models.dart';
 import 'package:ceo_communication_trainer/core/types/app_types.dart';
 import 'package:ceo_communication_trainer/features/training_plan/domain/adaptive_engine.dart';
+import 'package:ceo_communication_trainer/features/training_plan/domain/weekly_lesson_packet_engine.dart';
 import 'package:ceo_communication_trainer/features/training_session/domain/scoring_engine.dart';
 import 'package:ceo_communication_trainer/services/app_service.dart';
 import 'package:ceo_communication_trainer/services/demo/prompt_seed.dart';
@@ -16,18 +17,30 @@ class SupabaseAppService extends AppService {
   SupabaseAppService({
     required SupabaseClient client,
     required AppConfig config,
-  }) : _client = client {
-    _authSubscription = _client.auth.onAuthStateChange.listen((_) {
-      unawaited(_syncWithAuthSession());
+  }) : _client = client,
+       _config = config {
+    _authSubscription = _client.auth.onAuthStateChange.listen((state) {
+      if (state.event == AuthChangeEvent.passwordRecovery) {
+        _isInPasswordRecovery = true;
+        _publish();
+      } else {
+        if (_isInPasswordRecovery &&
+            state.event == AuthChangeEvent.userUpdated) {
+          _isInPasswordRecovery = false;
+        }
+        unawaited(_syncWithAuthSession());
+      }
     });
     unawaited(_syncWithAuthSession());
   }
 
   final SupabaseClient _client;
+  final AppConfig _config;
 
   StreamSubscription<AuthState>? _authSubscription;
   final List<TrainingSession> _sessions = [];
   final List<WeeklyRecalibration> _recalibrations = [];
+  final List<WeeklyLessonPacket> _weeklyLessonPackets = [];
   final List<PromptTemplate> _promptLibrary = [];
 
   AppUser? _currentUser;
@@ -36,6 +49,7 @@ class SupabaseAppService extends AppService {
   TrainingPlan? _currentPlan;
   ProgressSnapshot? _progress;
   bool _isLoading = true;
+  bool _isInPasswordRecovery = false;
   bool _disposed = false;
   int _syncEpoch = 0;
 
@@ -46,6 +60,9 @@ class SupabaseAppService extends AppService {
 
   @override
   bool get isLoading => _isLoading;
+
+  @override
+  bool get isInPasswordRecovery => _isInPasswordRecovery;
 
   @override
   AppUser? get currentUser => _currentUser;
@@ -67,16 +84,17 @@ class SupabaseAppService extends AppService {
 
   @override
   List<PromptTemplate> get baselinePrompts {
-    final prompts = _promptLibrary
-        .where((prompt) => prompt.slug.startsWith('baseline-'))
-        .toList()
-      ..sort((a, b) {
-        final aIndex = _baselinePromptOrder.indexOf(a.slug);
-        final bIndex = _baselinePromptOrder.indexOf(b.slug);
-        return (aIndex == -1 ? 999 : aIndex).compareTo(
-          bIndex == -1 ? 999 : bIndex,
-        );
-      });
+    final prompts =
+        _promptLibrary
+            .where((prompt) => prompt.slug.startsWith('baseline-'))
+            .toList()
+          ..sort((a, b) {
+            final aIndex = _baselinePromptOrder.indexOf(a.slug);
+            final bIndex = _baselinePromptOrder.indexOf(b.slug);
+            return (aIndex == -1 ? 999 : aIndex).compareTo(
+              bIndex == -1 ? 999 : bIndex,
+            );
+          });
     return List.unmodifiable(prompts);
   }
 
@@ -88,11 +106,61 @@ class SupabaseAppService extends AppService {
       List.unmodifiable(_recalibrations.reversed);
 
   @override
+  List<WeeklyLessonPacket> get weeklyLessonPackets =>
+      List.unmodifiable(_weeklyLessonPackets.reversed);
+
+  @override
+  WeeklyLessonPacket? weeklyLessonPacketForWeek(int weekNumber) {
+    final currentVersionId = _currentPlan?.currentVersion.id;
+    if (currentVersionId == null) {
+      return null;
+    }
+    return _weeklyLessonPackets
+        .where(
+          (packet) =>
+              packet.planVersionId == currentVersionId &&
+              packet.weekNumber == weekNumber,
+        )
+        .firstOrNull;
+  }
+
+  @override
+  WeeklyDrillLesson? weeklyLessonForPlanItem(String planItemId) {
+    final item = _currentPlan?.currentVersion.items
+        .where((entry) => entry.id == planItemId)
+        .firstOrNull;
+    if (item == null) {
+      return null;
+    }
+    return weeklyLessonPacketForWeek(item.weekNumber)?.lessonForPlanItem(planItemId);
+  }
+
+  @override
   DashboardSnapshot? get dashboard {
     final progress = _progress;
-    final plan = _currentPlan;
-    if (progress == null || plan == null) {
+    if (progress == null) {
       return null;
+    }
+    final plan = _currentPlan;
+    if (plan == null) {
+      final weakestPillar = progress.pillarScores.entries
+          .reduce((a, b) => a.value <= b.value ? a : b)
+          .key;
+      final latestImprovement = _sessions.isEmpty
+          ? 0.0
+          : (_sessions.first.scoreDelta ?? 0.0);
+
+      return DashboardSnapshot(
+        currentLevel: progress.currentLevel,
+        readinessScore: progress.readinessScore,
+        streak: progress.currentStreak,
+        thisWeeksStatus: progress.latestRecalibrationState,
+        todayItems: const [],
+        upcomingItems: const [],
+        weakestPillar: weakestPillar,
+        latestImprovement: latestImprovement,
+        progress: progress,
+      );
     }
 
     final today = DateTime.now();
@@ -130,18 +198,38 @@ class SupabaseAppService extends AppService {
   }
 
   @override
-  Future<void> signIn(String email, String password, {bool isSignUp = false}) async {
+  Future<void> signIn(
+    String email,
+    String password, {
+    bool isSignUp = false,
+  }) async {
     final normalizedEmail = email.trim().toLowerCase();
     if (isSignUp) {
       await _client.auth.signUp(email: normalizedEmail, password: password);
     } else {
-      await _client.auth.signInWithPassword(email: normalizedEmail, password: password);
+      await _client.auth.signInWithPassword(
+        email: normalizedEmail,
+        password: password,
+      );
     }
   }
 
   @override
   Future<void> signOut() async {
     await _client.auth.signOut();
+  }
+
+  @override
+  Future<void> sendPasswordResetEmail(String email) async {
+    await _client.auth.resetPasswordForEmail(
+      email,
+      redirectTo: _passwordResetRedirectTo,
+    );
+  }
+
+  @override
+  Future<void> updatePassword(String newPassword) async {
+    await _client.auth.updateUser(UserAttributes(password: newPassword));
   }
 
   @override
@@ -265,6 +353,10 @@ class SupabaseAppService extends AppService {
   @override
   Future<TrainingSession> openBaselineSession(int index) async {
     final prompt = baselinePrompts[index];
+    debugPrint(
+      'openBaselineSession index=$index prompt=${prompt.id} '
+      'cachedSessions=${_sessions.length}',
+    );
     final existing = _sessions
         .where(
           (session) =>
@@ -274,6 +366,10 @@ class SupabaseAppService extends AppService {
         )
         .firstOrNull;
     if (existing != null) {
+      debugPrint(
+        'openBaselineSession.reuse session=${existing.id} '
+        'attempts=${existing.attempts.length} reviews=${existing.reviews.length}',
+      );
       return existing;
     }
 
@@ -298,6 +394,9 @@ class SupabaseAppService extends AppService {
     _sessions.insert(0, session);
     _syncEpoch++;
     _publish();
+    debugPrint(
+      'openBaselineSession.created session=${session.id} prompt=${prompt.id}',
+    );
     return session;
   }
 
@@ -318,7 +417,14 @@ class SupabaseAppService extends AppService {
     if (planItem == null) {
       throw StateError('Plan item not found.');
     }
-    final prompt = _promptLibrary.firstWhere((item) => item.id == planItem.promptId);
+    if (weeklyLessonPacketForWeek(planItem.weekNumber) == null) {
+      throw StateError(
+        'Week ${planItem.weekNumber} requires an imported AI lesson packet before drills can start.',
+      );
+    }
+    final prompt = _promptLibrary.firstWhere(
+      (item) => item.id == planItem.promptId,
+    );
 
     final row = await _client
         .from('training_sessions')
@@ -347,10 +453,16 @@ class SupabaseAppService extends AppService {
 
   @override
   Future<TrainingSession> openRetrySession(String sessionId) async {
+    debugPrint('openRetrySession session=$sessionId');
     final existing = _sessions
         .where((session) => session.id == sessionId)
         .firstOrNull;
-    if (existing != null) {
+    if (existing != null && existing.reviews.isNotEmpty) {
+      debugPrint(
+        'openRetrySession.reuse session=${existing.id} '
+        'attempts=${existing.attempts.length} reviews=${existing.reviews.length}',
+      );
+      _publish();
       return existing;
     }
 
@@ -363,6 +475,10 @@ class SupabaseAppService extends AppService {
     _sessions.insert(0, session);
     _syncEpoch++;
     _publish();
+    debugPrint(
+      'openRetrySession.fetched session=${session.id} '
+      'attempts=${session.attempts.length} reviews=${session.reviews.length}',
+    );
     return session;
   }
 
@@ -372,12 +488,22 @@ class SupabaseAppService extends AppService {
     required String responseText,
     required ResponseMode responseMode,
   }) async {
-    final sessionIndex = _sessions.indexWhere((session) => session.id == sessionId);
+    debugPrint(
+      'submitAttempt.start session=$sessionId responseMode=$responseMode',
+    );
+    final sessionIndex = _sessions.indexWhere(
+      (session) => session.id == sessionId,
+    );
     if (sessionIndex == -1) {
       throw StateError('Session not found.');
     }
 
     final session = _sessions[sessionIndex];
+    if (session.attempts.length >= 2) {
+      throw StateError(
+        'This session already has two attempts. Open feedback and finish the session.',
+      );
+    }
     final nextAttemptNo = session.attempts.length + 1;
     final trimmedText = responseText.trim();
     final wordCount = _wordCount(trimmedText);
@@ -391,19 +517,46 @@ class SupabaseAppService extends AppService {
         .update({'device_mode': responseModeToDb(responseMode)})
         .eq('id', sessionId);
 
-    final attemptRow = await _client
-        .from('session_attempts')
-        .insert({
-          'training_session_id': sessionId,
-          'attempt_no': nextAttemptNo,
-          'duration_ms': estimatedDurationSeconds * 1000,
-          'transcript_text': trimmedText,
-          'word_count': wordCount,
-          'word_timings': const [],
-          'response_mode': responseModeToDb(responseMode),
-        })
-        .select()
-        .single();
+    Map<String, dynamic> attemptRow;
+    try {
+      attemptRow = Map<String, dynamic>.from(
+        await _client
+            .from('session_attempts')
+            .insert({
+              'training_session_id': sessionId,
+              'attempt_no': nextAttemptNo,
+              'duration_ms': estimatedDurationSeconds * 1000,
+              'transcript_text': trimmedText,
+              'word_count': wordCount,
+              'word_timings': const [],
+              'response_mode': responseModeToDb(responseMode),
+            })
+            .select()
+            .single(),
+      );
+      debugPrint(
+        'submitAttempt.attemptInserted session=$sessionId '
+        'attempt=${attemptRow['id']}',
+      );
+    } on PostgrestException catch (e) {
+      if (e.code == '23514') {
+        final fresh = await _fetchSessionById(sessionId);
+        if (fresh != null) {
+          final freshIndex = _sessions.indexWhere((s) => s.id == sessionId);
+          if (freshIndex != -1) {
+            _sessions[freshIndex] = fresh;
+          } else {
+            _sessions.insert(0, fresh);
+          }
+          _syncEpoch++;
+          _publish();
+        }
+        throw StateError(
+          'This session already reached the 2-attempt limit. Open feedback and finish the session.',
+        );
+      }
+      rethrow;
+    }
 
     final scored = ScoringEngine.evaluate(
       prompt: session.prompt,
@@ -413,32 +566,55 @@ class SupabaseAppService extends AppService {
     );
     final attemptId = attemptRow['id'].toString();
 
-    await _client.from('session_scores').insert(
-      sessionScoreToRow(scored.score, attemptId: attemptId),
+    await _client
+        .from('session_scores')
+        .insert(sessionScoreToRow(scored.score, attemptId: attemptId));
+    debugPrint(
+      'submitAttempt.scoreInserted session=$sessionId attempt=$attemptId',
     );
-    await _client.from('session_feedback').insert(
-      sessionFeedbackToRow(scored.feedback, attemptId: attemptId),
+    await _client
+        .from('session_feedback')
+        .insert(sessionFeedbackToRow(scored.feedback, attemptId: attemptId));
+    debugPrint(
+      'submitAttempt.feedbackInserted session=$sessionId attempt=$attemptId',
     );
 
-    final updated = session.copyWith(
-      attempts: [
-        ...session.attempts,
-        sessionAttemptFromRow(Map<String, dynamic>.from(attemptRow)),
-      ],
-      reviews: [
-        ...session.reviews,
-        AttemptReview(score: scored.score, feedback: scored.feedback),
-      ],
+    // Re-look up after all DB awaits — a background sync may have reloaded
+    // _sessions with a fresh version of this session.
+    final freshIndex = _sessions.indexWhere((s) => s.id == sessionId);
+    final freshSession = freshIndex != -1 ? _sessions[freshIndex] : session;
+    final newAttempt = sessionAttemptFromRow(
+      Map<String, dynamic>.from(attemptRow),
     );
-    _sessions[sessionIndex] = updated;
+    final newReview = AttemptReview(
+      score: scored.score,
+      feedback: scored.feedback,
+    );
+    final updated = freshSession.copyWith(
+      attempts: freshSession.attempts.any((a) => a.id == newAttempt.id)
+          ? freshSession.attempts
+          : [...freshSession.attempts, newAttempt],
+      reviews: [...freshSession.reviews, newReview],
+    );
+    if (freshIndex != -1) {
+      _sessions[freshIndex] = updated;
+    } else {
+      _sessions.insert(0, updated);
+    }
     _syncEpoch++;
     _publish();
+    debugPrint(
+      'submitAttempt.complete session=$sessionId '
+      'attempts=${updated.attempts.length} reviews=${updated.reviews.length}',
+    );
     return updated;
   }
 
   @override
   Future<void> finalizeSession(String sessionId) async {
-    final sessionIndex = _sessions.indexWhere((session) => session.id == sessionId);
+    final sessionIndex = _sessions.indexWhere(
+      (session) => session.id == sessionId,
+    );
     if (sessionIndex == -1) {
       return;
     }
@@ -519,7 +695,9 @@ class SupabaseAppService extends AppService {
           'from_version_id': plan.currentVersion.id,
           'to_version_id': plan.currentVersion.id,
           'week_number': recalibration.weekNumber,
-          'classification': recalibrationStateToDb(recalibration.classification),
+          'classification': recalibrationStateToDb(
+            recalibration.classification,
+          ),
           'signal_snapshot': {
             'overall_score_ema': progress.overallScoreEma,
             'readiness_score': progress.readinessScore,
@@ -533,18 +711,118 @@ class SupabaseAppService extends AppService {
 
     final saved = weeklyRecalibrationFromRow(Map<String, dynamic>.from(row));
     _recalibrations.insert(0, saved);
-    _progress = progress.copyWith(latestRecalibrationState: saved.classification);
+    _progress = progress.copyWith(
+      latestRecalibrationState: saved.classification,
+    );
 
     await _client
         .from('user_progress')
         .update({
-          'latest_recalibration_state': recalibrationStateToDb(saved.classification),
+          'latest_recalibration_state': recalibrationStateToDb(
+            saved.classification,
+          ),
         })
         .eq('user_id', _requireCurrentUser().id);
 
     _publish();
     return saved;
   }
+
+  @override
+  Future<String> buildWeeklyLessonPrompt(int weekNumber) async {
+    final plan = _currentPlan;
+    final baseline = _baselineSummary;
+    if (plan == null || baseline == null) {
+      throw StateError('A completed baseline and active plan are required.');
+    }
+
+    final payload = WeeklyLessonPacketEngine.buildPromptInput(
+      weekNumber: weekNumber,
+      plan: plan,
+      baseline: baseline,
+      progress: _progress,
+      sessions: _sessions,
+      previousWeekPacket: weeklyLessonPacketForWeek(weekNumber - 1),
+    );
+    final accessToken = _client.auth.currentSession?.accessToken;
+
+    try {
+      final response = await _client.functions.invoke(
+        'build-weekly-lesson-prompt',
+        body: payload,
+        headers: accessToken == null
+            ? null
+            : {'Authorization': 'Bearer $accessToken'},
+      );
+      final data = asMap(response.data);
+      final prompt = data['prompt']?.toString().trim() ?? '';
+      if (prompt.isNotEmpty) {
+        return prompt;
+      }
+    } catch (error, stackTrace) {
+      debugPrint(
+        'buildWeeklyLessonPrompt: edge function failed, using local fallback. '
+        '$error\n$stackTrace',
+      );
+    }
+
+    return WeeklyLessonPacketEngine.buildPrompt(
+      weekNumber: weekNumber,
+      plan: plan,
+      baseline: baseline,
+      progress: _progress,
+      sessions: _sessions,
+      previousWeekPacket: weeklyLessonPacketForWeek(weekNumber - 1),
+    );
+  }
+
+  @override
+  Future<WeeklyLessonPacket> importWeeklyLessonPacket({
+    required int weekNumber,
+    required String rawJson,
+  }) async {
+    final user = _requireCurrentUser();
+    final plan = _currentPlan;
+    if (plan == null) {
+      throw StateError('An active plan is required.');
+    }
+
+    final weekItems = plan.currentVersion.items
+        .where((item) => item.weekNumber == weekNumber)
+        .toList();
+    final validated = WeeklyLessonPacketEngine.parseImport(
+      expectedWeekNumber: weekNumber,
+      weekItems: weekItems,
+      rawJson: rawJson,
+    );
+
+    final row = await _client
+        .from('weekly_lesson_packets')
+        .upsert({
+          'plan_version_id': plan.currentVersion.id,
+          'user_id': user.id,
+          'week_number': validated.weekNumber,
+          'weekly_objective': validated.weeklyObjective,
+          'development_summary': validated.developmentSummary,
+          'packet_payload': validated.toPayload(),
+          'raw_import_text': validated.rawImportText,
+        }, onConflict: 'plan_version_id,week_number')
+        .select()
+        .single();
+
+    final packet = weeklyLessonPacketFromRow(Map<String, dynamic>.from(row));
+    _weeklyLessonPackets.removeWhere(
+      (entry) =>
+          entry.planVersionId == packet.planVersionId &&
+          entry.weekNumber == packet.weekNumber,
+    );
+    _weeklyLessonPackets.add(packet);
+    _publish();
+    return packet;
+  }
+
+  @override
+  Future<void> reload() => _syncWithAuthSession();
 
   @override
   void dispose() {
@@ -564,9 +842,15 @@ class SupabaseAppService extends AppService {
       return;
     }
 
+    final isInitialLoad = _currentUser == null;
     _currentUser = appUserFromSupabaseUser(user);
-    _isLoading = true;
-    _publish();
+    // Only block the UI during initial sign-in. Background token-refresh
+    // syncs should update data silently so mutations in flight (submitAttempt,
+    // finalizeSession, etc.) don't leave _isLoading stuck at true.
+    if (isInitialLoad) {
+      _isLoading = true;
+      _publish();
+    }
 
     try {
       final loadedPrompts = await _fetchPromptLibrary();
@@ -581,6 +865,68 @@ class SupabaseAppService extends AppService {
       );
       final loadedRecalibrations = await _fetchRecalibrations(user.id);
 
+      var resolvedPlan = loadedPlan;
+      var resolvedProgress = loadedProgress;
+      var resolvedPackets = <WeeklyLessonPacket>[];
+
+      if (loadedBaseline != null && loadedProfile != null) {
+        if (resolvedPlan == null) {
+          debugPrint(
+            'Supabase sync: missing training plan after baseline; '
+            'attempting recovery.',
+          );
+          try {
+            resolvedPlan = await _createInitialTrainingPlan(
+              user: _currentUser!,
+              profile: loadedProfile,
+              baseline: loadedBaseline,
+              promptLibrary: loadedPrompts,
+            );
+          } catch (error, stackTrace) {
+            debugPrint('Supabase plan recovery failed: $error\n$stackTrace');
+          }
+        }
+
+        if (resolvedProgress == null) {
+          debugPrint(
+            'Supabase sync: missing progress after baseline; '
+            'attempting recovery.',
+          );
+          final recoveredProgress = _buildRecoveredProgressSnapshot(
+            baseline: loadedBaseline,
+            sessions: loadedSessions,
+            currentPlan: resolvedPlan,
+          );
+          if (recoveredProgress != null) {
+            resolvedProgress = recoveredProgress;
+            try {
+              await _persistProgressSnapshot(
+                recoveredProgress,
+                historyPoints: recoveredProgress.pillarHistory,
+              );
+            } catch (error, stackTrace) {
+              debugPrint(
+                'Supabase progress recovery persistence failed: '
+                '$error\n$stackTrace',
+              );
+            }
+          }
+        }
+      }
+
+      if (resolvedPlan != null) {
+        try {
+          resolvedPackets = await _fetchWeeklyLessonPackets(
+            user.id,
+            resolvedPlan.currentVersion.id,
+          );
+        } catch (error, stackTrace) {
+          debugPrint(
+            'Supabase weekly lesson packet sync failed: $error\n$stackTrace',
+          );
+        }
+      }
+
       if (_disposed || epoch != _syncEpoch) {
         return;
       }
@@ -590,14 +936,17 @@ class SupabaseAppService extends AppService {
         ..addAll(loadedPrompts);
       _profile = loadedProfile;
       _baselineSummary = loadedBaseline;
-      _currentPlan = loadedPlan;
+      _currentPlan = resolvedPlan;
       _sessions
         ..clear()
         ..addAll(loadedSessions);
-      _progress = loadedProgress;
+      _progress = resolvedProgress;
       _recalibrations
         ..clear()
         ..addAll(loadedRecalibrations);
+      _weeklyLessonPackets
+        ..clear()
+        ..addAll(resolvedPackets);
     } catch (error, stackTrace) {
       debugPrint('Supabase sync failed: $error\n$stackTrace');
     } finally {
@@ -614,9 +963,9 @@ class SupabaseAppService extends AppService {
         .select()
         .eq('is_active', true)
         .order('created_at');
-    return List<Map<String, dynamic>>.from(rows as List)
-        .map(promptTemplateFromRow)
-        .toList();
+    return List<Map<String, dynamic>>.from(
+      rows as List,
+    ).map(promptTemplateFromRow).toList();
   }
 
   Future<UserProfile?> _fetchProfile(String userId) async {
@@ -676,9 +1025,9 @@ class SupabaseAppService extends AppService {
         .eq('plan_version_id', currentVersionId)
         .order('sequence_number');
 
-    final items = List<Map<String, dynamic>>.from(itemRows as List)
-        .map(planItemFromRow)
-        .toList();
+    final items = List<Map<String, dynamic>>.from(
+      itemRows as List,
+    ).map(planItemFromRow).toList();
     final currentVersion = trainingPlanVersionFromRow(
       Map<String, dynamic>.from(versionRow),
       items: items,
@@ -689,6 +1038,21 @@ class SupabaseAppService extends AppService {
       currentVersion: currentVersion,
       previousVersions: const [],
     );
+  }
+
+  Future<List<WeeklyLessonPacket>> _fetchWeeklyLessonPackets(
+    String userId,
+    String planVersionId,
+  ) async {
+    final rows = await _client
+        .from('weekly_lesson_packets')
+        .select()
+        .eq('user_id', userId)
+        .eq('plan_version_id', planVersionId)
+        .order('week_number');
+    return List<Map<String, dynamic>>.from(
+      rows as List,
+    ).map(weeklyLessonPacketFromRow).toList();
   }
 
   Future<List<TrainingSession>> _fetchSessions(
@@ -780,6 +1144,7 @@ class SupabaseAppService extends AppService {
   }
 
   Future<TrainingSession?> _fetchSessionById(String sessionId) async {
+    debugPrint('_fetchSessionById.start session=$sessionId');
     final row = await _client
         .from('training_sessions')
         .select()
@@ -790,7 +1155,9 @@ class SupabaseAppService extends AppService {
     }
 
     final promptId = row['prompt_id'].toString();
-    var prompt = _promptLibrary.where((item) => item.id == promptId).firstOrNull;
+    var prompt = _promptLibrary
+        .where((item) => item.id == promptId)
+        .firstOrNull;
     if (prompt == null) {
       final promptRow = await _client
           .from('prompts')
@@ -806,7 +1173,9 @@ class SupabaseAppService extends AppService {
         .eq('training_session_id', sessionId)
         .order('submitted_at');
     final attemptMaps = List<Map<String, dynamic>>.from(attemptRows as List);
-    final attemptIds = attemptMaps.map((item) => item['id'].toString()).toList();
+    final attemptIds = attemptMaps
+        .map((item) => item['id'].toString())
+        .toList();
 
     final scoreByAttemptId = <String, Map<String, dynamic>>{};
     final feedbackByAttemptId = <String, Map<String, dynamic>>{};
@@ -823,7 +1192,9 @@ class SupabaseAppService extends AppService {
           .from('session_feedback')
           .select()
           .inFilter('session_attempt_id', attemptIds);
-      for (final item in List<Map<String, dynamic>>.from(feedbackRows as List)) {
+      for (final item in List<Map<String, dynamic>>.from(
+        feedbackRows as List,
+      )) {
         feedbackByAttemptId[item['session_attempt_id'].toString()] = item;
       }
     }
@@ -845,12 +1216,17 @@ class SupabaseAppService extends AppService {
       }
     }
 
-    return trainingSessionFromRow(
+    final session = trainingSessionFromRow(
       Map<String, dynamic>.from(row),
       prompt: prompt,
       attempts: attempts,
       reviews: reviews,
     );
+    debugPrint(
+      '_fetchSessionById.complete session=$sessionId '
+      'attempts=${session.attempts.length} reviews=${session.reviews.length}',
+    );
+    return session;
   }
 
   Future<ProgressSnapshot?> _fetchProgress(
@@ -873,9 +1249,9 @@ class SupabaseAppService extends AppService {
         .eq('user_id', userId)
         .order('recorded_on')
         .order('created_at');
-    final pillarHistory = List<Map<String, dynamic>>.from(historyRows as List)
-        .map(pillarProgressPointFromRow)
-        .toList();
+    final pillarHistory = List<Map<String, dynamic>>.from(
+      historyRows as List,
+    ).map(pillarProgressPointFromRow).toList();
 
     final pillarScores = <Pillar, double>{
       for (final pillar in Pillar.values) pillar: 0,
@@ -884,14 +1260,17 @@ class SupabaseAppService extends AppService {
       pillarScores[point.pillar] = point.score;
     }
 
-    final completedSessions = sessions
-        .where((session) => session.isCompleted && session.finalScore != null)
-        .toList()
-      ..sort((a, b) {
-        final left = a.completedAt ?? a.startedAt;
-        final right = b.completedAt ?? b.startedAt;
-        return left.compareTo(right);
-      });
+    final completedSessions =
+        sessions
+            .where(
+              (session) => session.isCompleted && session.finalScore != null,
+            )
+            .toList()
+          ..sort((a, b) {
+            final left = a.completedAt ?? a.startedAt;
+            final right = b.completedAt ?? b.startedAt;
+            return left.compareTo(right);
+          });
     var overallTrend = completedSessions
         .map((session) => session.finalScore ?? 0)
         .toList();
@@ -899,7 +1278,8 @@ class SupabaseAppService extends AppService {
       overallTrend = overallTrend.sublist(overallTrend.length - 8);
     }
 
-    final missedSessions = currentPlan?.currentVersion.items
+    final missedSessions =
+        currentPlan?.currentVersion.items
             .where((item) => item.status == PlanItemStatus.missed)
             .length ??
         0;
@@ -919,9 +1299,9 @@ class SupabaseAppService extends AppService {
         .select()
         .eq('user_id', userId)
         .order('created_at', ascending: false);
-    return List<Map<String, dynamic>>.from(rows as List)
-        .map(weeklyRecalibrationFromRow)
-        .toList();
+    return List<Map<String, dynamic>>.from(
+      rows as List,
+    ).map(weeklyRecalibrationFromRow).toList();
   }
 
   bool _allBaselineSessionsCompleted() {
@@ -1017,7 +1397,10 @@ class SupabaseAppService extends AppService {
               .take(2)
               .map((entry) => pillarToDb(entry.key))
               .toList(),
-          'weak_pillars': ranked.take(2).map((entry) => pillarToDb(entry.key)).toList(),
+          'weak_pillars': ranked
+              .take(2)
+              .map((entry) => pillarToDb(entry.key))
+              .toList(),
           'behavior_snapshot': behaviorMetricsToDb(behaviorSnapshot),
           'summary_text':
               'You have a credible foundation, but the biggest upside still comes from faster answers and cleaner structure.',
@@ -1028,7 +1411,9 @@ class SupabaseAppService extends AppService {
     await _client
         .from('profiles')
         .update({
-          'baseline_completed_at': baselineCompletedAt.toUtc().toIso8601String(),
+          'baseline_completed_at': baselineCompletedAt
+              .toUtc()
+              .toIso8601String(),
         })
         .eq('id', _currentUser!.id);
 
@@ -1060,16 +1445,15 @@ class SupabaseAppService extends AppService {
       difficultyTolerance: 0.55,
       latestRecalibrationState: RecalibrationState.stable,
       pillarScores: averages,
-      overallTrend: completed.map((session) => session.finalScore ?? 0).toList(),
+      overallTrend: completed
+          .map((session) => session.finalScore ?? 0)
+          .toList(),
       pillarHistory: initialHistory,
       missedSessions: 0,
       lastSessionAt: DateTime.now(),
     );
 
-    await _persistProgressSnapshot(
-      _progress!,
-      historyPoints: initialHistory,
-    );
+    await _persistProgressSnapshot(_progress!, historyPoints: initialHistory);
   }
 
   Future<void> _persistInitialTrainingPlan() async {
@@ -1080,6 +1464,20 @@ class SupabaseAppService extends AppService {
       return;
     }
 
+    _currentPlan = await _createInitialTrainingPlan(
+      user: user,
+      profile: profile,
+      baseline: baseline,
+      promptLibrary: promptLibrary,
+    );
+  }
+
+  Future<TrainingPlan?> _createInitialTrainingPlan({
+    required AppUser user,
+    required UserProfile profile,
+    required CommunicationBaseline baseline,
+    required List<PromptTemplate> promptLibrary,
+  }) async {
     final generated = AdaptiveEngine.generateInitialPlan(
       userId: user.id,
       baseline: baseline,
@@ -1111,9 +1509,7 @@ class SupabaseAppService extends AppService {
                 'scheduled_for': toDbDate(item.scheduledFor),
                 'drill_type': item.drillType,
                 'prompt_id': item.promptId,
-                'focus_pillars': item.focusPillars
-                    .map(pillarToDb)
-                    .toList(),
+                'focus_pillars': item.focusPillars.map(pillarToDb).toList(),
                 'difficulty_tier': item.difficultyTier,
                 'target_metrics': item.targetMetrics,
                 'status': planItemStatusToDb(item.status),
@@ -1121,8 +1517,7 @@ class SupabaseAppService extends AppService {
           ],
         },
       },
-    ))
-        .toString();
+    )).toString();
 
     await _client.from('plan_items').insert([
       for (final item in generated.currentVersion.items)
@@ -1143,7 +1538,221 @@ class SupabaseAppService extends AppService {
         },
     ]);
 
-    _currentPlan = await _fetchTrainingPlan(user.id, _promptLibrary);
+    return _fetchTrainingPlan(user.id, promptLibrary);
+  }
+
+  ProgressSnapshot? _buildRecoveredProgressSnapshot({
+    required CommunicationBaseline baseline,
+    required List<TrainingSession> sessions,
+    required TrainingPlan? currentPlan,
+  }) {
+    final completed =
+        sessions
+            .where(
+              (session) => session.isCompleted && session.reviews.isNotEmpty,
+            )
+            .toList()
+          ..sort((a, b) {
+            final left = a.completedAt ?? a.startedAt;
+            final right = b.completedAt ?? b.startedAt;
+            return left.compareTo(right);
+          });
+    if (completed.isEmpty) {
+      return null;
+    }
+
+    final pillarTotals = <Pillar, double>{
+      for (final pillar in Pillar.values) pillar: 0,
+    };
+    final trend = <double>[];
+    final history = <PillarProgressPoint>[];
+
+    for (final session in completed) {
+      final review = _bestReviewForSession(session);
+      if (review == null) {
+        continue;
+      }
+      trend.add(session.finalScore ?? review.score.overallScore);
+      for (final pillar in Pillar.values) {
+        pillarTotals[pillar] =
+            (pillarTotals[pillar] ?? 0) +
+            (review.score.pillarScores[pillar] ?? 0);
+      }
+    }
+
+    final completedCount = completed.length;
+    if (completedCount == 0) {
+      return null;
+    }
+
+    final averages = <Pillar, double>{
+      for (final entry in pillarTotals.entries)
+        entry.key: entry.value / completedCount,
+    };
+    final latestReview = _bestReviewForSession(completed.last);
+    if (latestReview == null) {
+      return null;
+    }
+
+    final overall = AdaptiveEngine.computeOverallFromPillars(averages);
+    final coachingAdoptionRate = _coachingAdoptionRateFromSessions(completed);
+    final difficultyTolerance = _difficultyToleranceFromSessions(completed);
+    final weeklyCompletionRate = _weeklyCompletionRateForPlan(currentPlan);
+    final readiness = AdaptiveEngine.computeReadiness(
+      normalizedOverall: overall / 100,
+      consistency: weeklyCompletionRate,
+      coachingAdoption: coachingAdoptionRate,
+      difficultyTolerance: difficultyTolerance,
+    );
+    final level = AdaptiveEngine.assignLevel(
+      pillarScores: averages,
+      behavior: latestReview.score.behaviorMetrics.copyWith(
+        coachingAdoptionRate: coachingAdoptionRate,
+        consistency: weeklyCompletionRate,
+        difficultyTolerance: difficultyTolerance,
+      ),
+      overall: overall,
+      latestState: RecalibrationState.stable,
+    );
+
+    for (final entry in averages.entries) {
+      history.add(
+        PillarProgressPoint(
+          pillar: entry.key,
+          score: entry.value,
+          recordedOn: baseline.completedAt,
+          weekNumber: 0,
+        ),
+      );
+    }
+
+    return ProgressSnapshot(
+      currentLevel: level,
+      overallScoreEma: overall,
+      readinessScore: completed.length <= baselinePrompts.length
+          ? baseline.readinessScore
+          : readiness,
+      currentStreak: _currentStreakFromSessions(completed),
+      totalXp: _totalXpFromSessions(completed),
+      weeklyCompletionRate: completed.length <= baselinePrompts.length
+          ? 1
+          : weeklyCompletionRate,
+      coachingAdoptionRate: coachingAdoptionRate,
+      difficultyTolerance: difficultyTolerance,
+      latestRecalibrationState: RecalibrationState.stable,
+      pillarScores: averages,
+      overallTrend: trend.length > 8 ? trend.sublist(trend.length - 8) : trend,
+      pillarHistory: history,
+      missedSessions:
+          currentPlan?.currentVersion.items
+              .where((item) => item.status == PlanItemStatus.missed)
+              .length ??
+          0,
+      lastSessionAt: completed.last.completedAt ?? completed.last.startedAt,
+    );
+  }
+
+  AttemptReview? _bestReviewForSession(TrainingSession session) {
+    if (session.reviews.isEmpty) {
+      return null;
+    }
+    final bestAttemptIndex = (session.bestAttemptNo ?? 1) - 1;
+    if (bestAttemptIndex >= 0 && bestAttemptIndex < session.reviews.length) {
+      return session.reviews[bestAttemptIndex];
+    }
+    return session.reviews.last;
+  }
+
+  double _coachingAdoptionRateFromSessions(List<TrainingSession> sessions) {
+    final reviewed = sessions.where((session) => session.reviews.length > 1);
+    if (reviewed.isEmpty) {
+      return 0.5;
+    }
+    final improved = reviewed
+        .where((session) => (session.scoreDelta ?? 0) >= 3)
+        .length;
+    return improved / reviewed.length;
+  }
+
+  double _difficultyToleranceFromSessions(List<TrainingSession> sessions) {
+    final dailyPlanSessions = sessions
+        .where((session) => session.origin == SessionOrigin.dailyPlan)
+        .toList();
+    if (dailyPlanSessions.isEmpty) {
+      return 0.55;
+    }
+
+    final highestTier = dailyPlanSessions
+        .map((session) => session.prompt.difficultyTier)
+        .fold<int>(1, max);
+    final highestTierSessions = dailyPlanSessions
+        .where((session) => session.prompt.difficultyTier == highestTier)
+        .toList();
+    if (highestTierSessions.isEmpty) {
+      return 0.55;
+    }
+
+    final successful = highestTierSessions
+        .where((session) => (session.finalScore ?? 0) >= 65)
+        .length;
+    return successful / highestTierSessions.length;
+  }
+
+  double _weeklyCompletionRateForPlan(TrainingPlan? plan) {
+    if (plan == null) {
+      return 1;
+    }
+
+    final weekNumber = _currentWeekNumberForPlan(plan);
+    final thisWeek = plan.currentVersion.items
+        .where((item) => item.weekNumber == weekNumber)
+        .toList();
+    if (thisWeek.isEmpty) {
+      return 1;
+    }
+
+    final completed = thisWeek
+        .where((item) => item.status == PlanItemStatus.completed)
+        .length;
+    return completed / thisWeek.length;
+  }
+
+  int _currentStreakFromSessions(List<TrainingSession> sessions) {
+    final completed =
+        sessions.where((session) => session.completedAt != null).toList()
+          ..sort((a, b) => b.completedAt!.compareTo(a.completedAt!));
+    if (completed.isEmpty) {
+      return 0;
+    }
+
+    var streak = 0;
+    var cursor = DateTime.now();
+    while (true) {
+      final found = completed.any(
+        (session) => _isSameDay(session.completedAt!, cursor),
+      );
+      if (!found) {
+        break;
+      }
+      streak++;
+      cursor = cursor.subtract(const Duration(days: 1));
+    }
+    return max(streak, 1);
+  }
+
+  int _totalXpFromSessions(List<TrainingSession> sessions) {
+    var xp = sessions.length * 10;
+    xp +=
+        sessions.where((session) => (session.scoreDelta ?? 0) >= 3).length * 5;
+    return xp;
+  }
+
+  int _currentWeekNumberForPlan(TrainingPlan? plan) {
+    if (plan == null) {
+      return 1;
+    }
+    return (((DateTime.now().difference(plan.startDate).inDays) ~/ 7) + 1)
+        .clamp(1, 10);
   }
 
   Future<void> _refreshProgressFromCompletedSessions() async {
@@ -1152,9 +1761,7 @@ class SupabaseAppService extends AppService {
       return;
     }
 
-    final completed = _sessions
-        .where((session) => session.isCompleted)
-        .toList()
+    final completed = _sessions.where((session) => session.isCompleted).toList()
       ..sort((a, b) {
         final left = a.completedAt ?? a.startedAt;
         final right = b.completedAt ?? b.startedAt;
@@ -1418,6 +2025,7 @@ class SupabaseAppService extends AppService {
     _promptLibrary.clear();
     _sessions.clear();
     _recalibrations.clear();
+    _weeklyLessonPackets.clear();
   }
 
   void _publish() {
@@ -1425,6 +2033,14 @@ class SupabaseAppService extends AppService {
       return;
     }
     notifyListeners();
+  }
+
+  String get _passwordResetRedirectTo {
+    if (kIsWeb) {
+      final current = Uri.base;
+      return current.replace(query: null, fragment: null).toString();
+    }
+    return _config.authRedirectUrl;
   }
 }
 

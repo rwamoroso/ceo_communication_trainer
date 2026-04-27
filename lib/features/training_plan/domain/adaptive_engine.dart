@@ -169,7 +169,7 @@ class AdaptiveEngine {
             dayNumber: day,
             sequenceNumber: items.length + 1,
             scheduledFor: date,
-            drillType: prompt.category.name,
+            drillType: prompt.category.label,
             focusPillars: prompt.activePillars,
             difficultyTier: tier,
             targetMetrics: prompt.behaviorTargets,
@@ -276,7 +276,7 @@ class AdaptiveEngine {
     if (weakestPillar == Pillar.clarity || clarity < 60 || structure < 60) {
       hits.add('clarity_before_strategy');
     }
-    hits.add(classification.name);
+    hits.add(classification.code);
     return hits;
   }
 

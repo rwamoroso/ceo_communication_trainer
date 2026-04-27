@@ -53,32 +53,58 @@ final progressRepositoryProvider = Provider<ProgressRepository>(
   (ref) => ref.watch(appServiceProvider),
 );
 
+// All data-reading providers watch appServiceProvider directly.
+// Intermediate repository providers (authRepositoryProvider, etc.) return the
+// same AppService object reference on every evaluation, so Riverpod's Provider
+// considers the value unchanged and never propagates notifyListeners() calls to
+// screens that are kept alive in the StatefulShellRoute indexedStack. Watching
+// the ChangeNotifierProvider directly ensures every notifyListeners() reaches
+// every widget that cares about the data.
+
 final currentUserProvider = Provider<AppUser?>(
-  (ref) => ref.watch(authRepositoryProvider).currentUser,
+  (ref) => ref.watch(appServiceProvider).currentUser,
+);
+
+final isInPasswordRecoveryProvider = Provider<bool>(
+  (ref) => ref.watch(appServiceProvider).isInPasswordRecovery,
 );
 
 final currentProfileProvider = Provider<UserProfile?>(
-  (ref) => ref.watch(profileRepositoryProvider).currentProfile,
+  (ref) => ref.watch(appServiceProvider).currentProfile,
 );
 
 final baselineSummaryProvider = Provider<CommunicationBaseline?>(
-  (ref) => ref.watch(trainingRepositoryProvider).baselineSummary,
+  (ref) => ref.watch(appServiceProvider).baselineSummary,
 );
 
 final currentPlanProvider = Provider<TrainingPlan?>(
-  (ref) => ref.watch(trainingRepositoryProvider).currentPlan,
+  (ref) => ref.watch(appServiceProvider).currentPlan,
 );
 
+final weeklyLessonPacketsProvider = Provider<List<WeeklyLessonPacket>>(
+  (ref) => ref.watch(appServiceProvider).weeklyLessonPackets,
+);
+
+final weeklyLessonPacketByWeekProvider =
+    Provider.family<WeeklyLessonPacket?, int>((ref, weekNumber) {
+      return ref.watch(appServiceProvider).weeklyLessonPacketForWeek(weekNumber);
+    });
+
+final weeklyLessonForPlanItemProvider =
+    Provider.family<WeeklyDrillLesson?, String>((ref, planItemId) {
+      return ref.watch(appServiceProvider).weeklyLessonForPlanItem(planItemId);
+    });
+
 final progressSnapshotProvider = Provider<ProgressSnapshot?>(
-  (ref) => ref.watch(progressRepositoryProvider).progress,
+  (ref) => ref.watch(appServiceProvider).progress,
 );
 
 final dashboardSnapshotProvider = Provider<DashboardSnapshot?>(
-  (ref) => ref.watch(progressRepositoryProvider).dashboard,
+  (ref) => ref.watch(appServiceProvider).dashboard,
 );
 
 final sessionHistoryProvider = Provider<List<TrainingSession>>(
-  (ref) => ref.watch(trainingRepositoryProvider).sessions,
+  (ref) => ref.watch(appServiceProvider).sessions,
 );
 
 final sessionByIdProvider = Provider.family<TrainingSession?, String>((
@@ -95,9 +121,9 @@ final sessionByIdProvider = Provider.family<TrainingSession?, String>((
 });
 
 final promptLibraryProvider = Provider<List<PromptTemplate>>(
-  (ref) => ref.watch(trainingRepositoryProvider).promptLibrary,
+  (ref) => ref.watch(appServiceProvider).promptLibrary,
 );
 
 final recalibrationsProvider = Provider<List<WeeklyRecalibration>>(
-  (ref) => ref.watch(trainingRepositoryProvider).recalibrations,
+  (ref) => ref.watch(appServiceProvider).recalibrations,
 );

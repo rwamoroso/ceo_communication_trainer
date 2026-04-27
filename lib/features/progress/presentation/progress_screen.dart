@@ -13,9 +13,35 @@ class ProgressScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final progress = ref.watch(progressSnapshotProvider);
     final sessions = ref.watch(sessionHistoryProvider);
+    final baseline = ref.watch(baselineSummaryProvider);
     final theme = Theme.of(context);
 
     if (progress == null) {
+      if (baseline != null) {
+        return ListView(
+          padding: const EdgeInsets.all(24),
+          children: [
+            Text('Progress', style: theme.textTheme.headlineMedium),
+            const SizedBox(height: 16),
+            ShellCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Progress data is still being rebuilt.',
+                    style: theme.textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'The app recovered your baseline, but the persisted progress snapshot is still missing. '
+                    'Reopen the app after applying the latest Supabase migration if this stays empty.',
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      }
       return const Center(child: CircularProgressIndicator());
     }
 
