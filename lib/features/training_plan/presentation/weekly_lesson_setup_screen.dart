@@ -75,7 +75,9 @@ class _WeeklyLessonSetupScreenState
       _importError = null;
     });
     try {
-      await ref.read(trainingRepositoryProvider).importWeeklyLessonPacket(
+      await ref
+          .read(trainingRepositoryProvider)
+          .importWeeklyLessonPacket(
             weekNumber: widget.weekNumber,
             rawJson: _importController.text,
           );
@@ -99,7 +101,9 @@ class _WeeklyLessonSetupScreenState
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final plan = ref.watch(currentPlanProvider);
-    final packet = ref.watch(weeklyLessonPacketByWeekProvider(widget.weekNumber));
+    final packet = ref.watch(
+      weeklyLessonPacketByWeekProvider(widget.weekNumber),
+    );
     final weekItems = plan?.currentVersion.items
         .where((item) => item.weekNumber == widget.weekNumber)
         .toList();
@@ -131,7 +135,7 @@ class _WeeklyLessonSetupScreenState
     }
 
     return Scaffold(
-      appBar: AppBar(title: Text('Week ${widget.weekNumber} AI setup')),
+      appBar: AppBar(title: Text('Week ${widget.weekNumber} question pack')),
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
@@ -143,7 +147,7 @@ class _WeeklyLessonSetupScreenState
                 const SizedBox(height: 8),
                 Text(
                   packet == null
-                      ? 'Not imported yet. Build a prompt, run it in AI, and paste back the strict JSON response.'
+                      ? 'No lesson packet yet. Build a copy/paste prompt, run it in your AI tool, and import the JSON question pack for next week.'
                       : 'Imported and ready for this week.',
                 ),
                 const SizedBox(height: 16),
@@ -154,7 +158,9 @@ class _WeeklyLessonSetupScreenState
                     ElevatedButton(
                       onPressed: _loadingPrompt ? null : _buildPrompt,
                       child: Text(
-                        _loadingPrompt ? 'Building prompt...' : 'Build AI prompt',
+                        _loadingPrompt
+                            ? 'Building prompt...'
+                            : 'Build AI question prompt',
                       ),
                     ),
                     if (_prompt != null)
@@ -168,8 +174,9 @@ class _WeeklyLessonSetupScreenState
                     ),
                     if (packet != null && widget.nextPlanItemId != null)
                       OutlinedButton(
-                        onPressed: () =>
-                            context.go('/plan-item/${widget.nextPlanItemId}/drill'),
+                        onPressed: () => context.go(
+                          '/plan-item/${widget.nextPlanItemId}/drill',
+                        ),
                         child: const Text('Open drill'),
                       ),
                   ],
@@ -217,7 +224,11 @@ class _WeeklyLessonSetupScreenState
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('AI prompt', style: theme.textTheme.titleLarge),
+                  Text('AI question prompt', style: theme.textTheme.titleLarge),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Copy this prompt into your AI tool to generate next week\'s personalized drill questions and lesson packet.',
+                  ),
                   const SizedBox(height: 12),
                   SelectableText(_prompt!),
                 ],
@@ -229,17 +240,18 @@ class _WeeklyLessonSetupScreenState
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Paste AI JSON response', style: theme.textTheme.titleLarge),
+                Text('Manual JSON import', style: theme.textTheme.titleLarge),
                 const SizedBox(height: 8),
                 const Text(
-                  'Paste the strict JSON response from your external AI tool. The app validates every required field before saving it.',
+                  'Paste the strict JSON response from your AI tool here. The app validates the lesson packet, including the exact drill questions for the coming week, before saving it.',
                 ),
                 const SizedBox(height: 16),
                 TextField(
                   controller: _importController,
                   maxLines: 18,
                   decoration: const InputDecoration(
-                    hintText: '{\n  "week_number": 1,\n  "weekly_objective": "..."\n}',
+                    hintText:
+                        '{\n  "week_number": 1,\n  "weekly_objective": "..."\n}',
                   ),
                 ),
                 if (_importError != null) ...[
@@ -269,7 +281,10 @@ class _WeeklyLessonSetupScreenState
                 children: [
                   Text('Imported summary', style: theme.textTheme.titleLarge),
                   const SizedBox(height: 12),
-                  Text(packet.weeklyObjective, style: theme.textTheme.titleMedium),
+                  Text(
+                    packet.weeklyObjective,
+                    style: theme.textTheme.titleMedium,
+                  ),
                   const SizedBox(height: 8),
                   Text(packet.developmentSummary),
                   if (packet.previousWeekAnalysis.isNotEmpty) ...[

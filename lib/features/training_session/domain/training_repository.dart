@@ -26,11 +26,20 @@ abstract class TrainingRepository {
     required ResponseMode responseMode,
   });
 
+  Future<String> buildSessionEvaluationPrompt(String sessionId);
+
+  Future<TrainingSession> importSessionEvaluation({
+    required String sessionId,
+    required String rawJson,
+  });
+
   Future<void> finalizeSession(String sessionId);
 
   Future<WeeklyRecalibration> generateWeeklyRecalibration();
 
   Future<String> buildWeeklyLessonPrompt(int weekNumber);
+
+  Future<WeeklyLessonPacket> generateWeeklyLessonPacket(int weekNumber);
 
   Future<WeeklyLessonPacket> importWeeklyLessonPacket({
     required int weekNumber,

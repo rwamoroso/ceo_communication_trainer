@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:ceo_communication_trainer/app/bootstrap/app_config.dart';
@@ -6,7 +7,8 @@ import 'package:ceo_communication_trainer/core/types/app_models.dart';
 import 'package:ceo_communication_trainer/core/types/app_types.dart';
 import 'package:ceo_communication_trainer/features/training_plan/domain/adaptive_engine.dart';
 import 'package:ceo_communication_trainer/features/training_plan/domain/weekly_lesson_packet_engine.dart';
-import 'package:ceo_communication_trainer/features/training_session/domain/scoring_engine.dart';
+import 'package:ceo_communication_trainer/features/training_session/domain/drill_guidance.dart';
+import 'package:ceo_communication_trainer/features/training_session/domain/session_evaluation_engine.dart';
 import 'package:ceo_communication_trainer/services/app_service.dart';
 import 'package:ceo_communication_trainer/services/demo/prompt_seed.dart';
 import 'package:ceo_communication_trainer/services/supabase/supabase_mappers.dart';
@@ -14,6 +16,9 @@ import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class SupabaseAppService extends AppService {
+  static const _manualAiScoringVersion = 'manual-ai-v1';
+  static const _manualAiFeedbackVersion = 'manual-ai-v1';
+
   SupabaseAppService({
     required SupabaseClient client,
     required AppConfig config,
@@ -132,7 +137,9 @@ class SupabaseAppService extends AppService {
     if (item == null) {
       return null;
     }
-    return weeklyLessonPacketForWeek(item.weekNumber)?.lessonForPlanItem(planItemId);
+    return weeklyLessonPacketForWeek(
+      item.weekNumber,
+    )?.lessonForPlanItem(planItemId);
   }
 
   @override
@@ -257,6 +264,7 @@ class SupabaseAppService extends AppService {
       'preferred_response_mode': responseModeToDb(
         _profile?.preferredResponseMode ?? ResponseMode.typed,
       ),
+      'daily_reminder_time': _profile?.dailyReminderTime ?? '',
       'onboarding_completed_at': _profile?.onboardingCompletedAt
           ?.toUtc()
           .toIso8601String(),
@@ -281,6 +289,7 @@ class SupabaseAppService extends AppService {
                   goals: const [],
                   microphoneConsent: false,
                   preferredResponseMode: ResponseMode.typed,
+                  dailyReminderTime: '',
                 ))
             .copyWith(
               displayName: displayName,
@@ -316,6 +325,7 @@ class SupabaseAppService extends AppService {
       'goals': goals,
       'microphone_consent': microphoneConsent,
       'preferred_response_mode': responseModeToDb(preferredResponseMode),
+      'daily_reminder_time': _profile?.dailyReminderTime ?? '',
       'onboarding_completed_at': completedAt.toUtc().toIso8601String(),
       'baseline_completed_at': _profile?.baselineCompletedAt
           ?.toUtc()
@@ -338,6 +348,7 @@ class SupabaseAppService extends AppService {
                   goals: const [],
                   microphoneConsent: false,
                   preferredResponseMode: ResponseMode.typed,
+                  dailyReminderTime: '',
                 ))
             .copyWith(
               weeklyGoalCount: weeklyGoalCount,
@@ -347,6 +358,20 @@ class SupabaseAppService extends AppService {
               preferredResponseMode: preferredResponseMode,
               onboardingCompletedAt: completedAt,
             );
+    _publish();
+  }
+
+  @override
+  Future<void> updateDailyReminderTime(String? dailyReminderTime) async {
+    final user = _requireCurrentUser();
+    final normalized = (dailyReminderTime ?? '').trim();
+    await _client
+        .from('profiles')
+        .update({'daily_reminder_time': normalized})
+        .eq('id', user.id);
+
+    _syncEpoch++;
+    _profile = _profile?.copyWith(dailyReminderTime: normalized);
     _publish();
   }
 
@@ -558,27 +583,6 @@ class SupabaseAppService extends AppService {
       rethrow;
     }
 
-    final scored = ScoringEngine.evaluate(
-      prompt: session.prompt,
-      responseText: trimmedText,
-      responseMode: responseMode,
-      previousAttempt: session.attempts.isEmpty ? null : session.attempts.last,
-    );
-    final attemptId = attemptRow['id'].toString();
-
-    await _client
-        .from('session_scores')
-        .insert(sessionScoreToRow(scored.score, attemptId: attemptId));
-    debugPrint(
-      'submitAttempt.scoreInserted session=$sessionId attempt=$attemptId',
-    );
-    await _client
-        .from('session_feedback')
-        .insert(sessionFeedbackToRow(scored.feedback, attemptId: attemptId));
-    debugPrint(
-      'submitAttempt.feedbackInserted session=$sessionId attempt=$attemptId',
-    );
-
     // Re-look up after all DB awaits — a background sync may have reloaded
     // _sessions with a fresh version of this session.
     final freshIndex = _sessions.indexWhere((s) => s.id == sessionId);
@@ -586,15 +590,10 @@ class SupabaseAppService extends AppService {
     final newAttempt = sessionAttemptFromRow(
       Map<String, dynamic>.from(attemptRow),
     );
-    final newReview = AttemptReview(
-      score: scored.score,
-      feedback: scored.feedback,
-    );
     final updated = freshSession.copyWith(
       attempts: freshSession.attempts.any((a) => a.id == newAttempt.id)
           ? freshSession.attempts
           : [...freshSession.attempts, newAttempt],
-      reviews: [...freshSession.reviews, newReview],
     );
     if (freshIndex != -1) {
       _sessions[freshIndex] = updated;
@@ -607,6 +606,99 @@ class SupabaseAppService extends AppService {
       'submitAttempt.complete session=$sessionId '
       'attempts=${updated.attempts.length} reviews=${updated.reviews.length}',
     );
+    return updated;
+  }
+
+  @override
+  Future<String> buildSessionEvaluationPrompt(String sessionId) async {
+    final session = _sessions.firstWhere(
+      (entry) => entry.id == sessionId,
+      orElse: () => throw StateError('Session not found.'),
+    );
+    if (session.attempts.isEmpty) {
+      throw StateError('Submit a response before requesting coaching.');
+    }
+    if (session.reviews.length >= session.attempts.length) {
+      throw StateError(
+        'The latest attempt already has coaching. Retry the session to generate a new prompt.',
+      );
+    }
+
+    return SessionEvaluationEngine.buildPrompt(
+      input: _buildAttemptEvaluationPayload(
+        session: session,
+        pendingAttempt: session.attempts.last,
+      ),
+    );
+  }
+
+  @override
+  Future<TrainingSession> importSessionEvaluation({
+    required String sessionId,
+    required String rawJson,
+  }) async {
+    final sessionIndex = _sessions.indexWhere(
+      (session) => session.id == sessionId,
+    );
+    if (sessionIndex == -1) {
+      throw StateError('Session not found.');
+    }
+
+    final session = _sessions[sessionIndex];
+    if (session.attempts.isEmpty) {
+      throw StateError('Submit a response before importing coaching.');
+    }
+    if (session.reviews.length >= session.attempts.length) {
+      throw StateError('This attempt already has imported coaching.');
+    }
+
+    final pendingAttempt = session.attempts.last;
+    final parsed = SessionEvaluationEngine.parseImport(
+      rawJson: rawJson,
+      scoringVersion: _manualAiScoringVersion,
+      feedbackVersion: _manualAiFeedbackVersion,
+    );
+
+    await _client
+        .from('session_scores')
+        .insert(
+          sessionScoreToRow(
+            parsed.scoredAttempt.score,
+            attemptId: pendingAttempt.id,
+          ),
+        );
+    await _client
+        .from('session_feedback')
+        .insert(
+          sessionFeedbackToRow(
+            parsed.scoredAttempt.feedback,
+            attemptId: pendingAttempt.id,
+          ),
+        );
+    await _applyNextDayDrillUpdate(parsed.nextDayDrillUpdate);
+
+    final refreshedIndex = _sessions.indexWhere(
+      (entry) => entry.id == sessionId,
+    );
+    final refreshed = refreshedIndex == -1
+        ? session
+        : _sessions[refreshedIndex];
+    final updated = refreshed.copyWith(
+      reviews: [
+        ...refreshed.reviews,
+        AttemptReview(
+          score: parsed.scoredAttempt.score,
+          feedback: parsed.scoredAttempt.feedback,
+        ),
+      ],
+    );
+    if (refreshedIndex != -1) {
+      _sessions[refreshedIndex] = updated;
+    } else {
+      _sessions.insert(0, updated);
+    }
+    _syncEpoch++;
+    _publish();
     return updated;
   }
 
@@ -777,11 +869,361 @@ class SupabaseAppService extends AppService {
   }
 
   @override
+  Future<WeeklyLessonPacket> generateWeeklyLessonPacket(int weekNumber) async {
+    final user = _requireCurrentUser();
+    final plan = _currentPlan;
+    final baseline = _baselineSummary;
+    if (plan == null || baseline == null) {
+      throw StateError('A completed baseline and active plan are required.');
+    }
+
+    final payload = WeeklyLessonPacketEngine.buildPromptInput(
+      weekNumber: weekNumber,
+      plan: plan,
+      baseline: baseline,
+      progress: _progress,
+      sessions: _sessions,
+      previousWeekPacket: weeklyLessonPacketForWeek(weekNumber - 1),
+    );
+    final accessToken = _client.auth.currentSession?.accessToken;
+
+    final response = await _client.functions.invoke(
+      'build-weekly-lesson-prompt',
+      body: payload,
+      headers: accessToken == null
+          ? null
+          : {'Authorization': 'Bearer $accessToken'},
+    );
+    final data = asMap(response.data);
+    final packetPayload = asMap(data['packet']);
+    if (packetPayload.isEmpty) {
+      throw StateError(
+        'Automatic lesson generation is unavailable right now. Use the manual AI prompt instead.',
+      );
+    }
+
+    final rawJson = const JsonEncoder.withIndent('  ').convert(packetPayload);
+    return _persistWeeklyLessonPacket(
+      userId: user.id,
+      planVersionId: plan.currentVersion.id,
+      weekNumber: weekNumber,
+      rawJson: rawJson,
+    );
+  }
+
+  @override
   Future<WeeklyLessonPacket> importWeeklyLessonPacket({
     required int weekNumber,
     required String rawJson,
   }) async {
     final user = _requireCurrentUser();
+    final plan = _currentPlan;
+    if (plan == null) {
+      throw StateError('An active plan is required.');
+    }
+
+    return _persistWeeklyLessonPacket(
+      userId: user.id,
+      planVersionId: plan.currentVersion.id,
+      weekNumber: weekNumber,
+      rawJson: rawJson,
+    );
+  }
+
+  Map<String, dynamic> _buildAttemptEvaluationPayload({
+    required TrainingSession session,
+    required SessionAttempt pendingAttempt,
+  }) {
+    final profile = _profile;
+    final lesson = session.planItemId == null
+        ? null
+        : weeklyLessonForPlanItem(session.planItemId!);
+    final planItem = session.planItemId == null
+        ? null
+        : _currentPlan?.currentVersion.items
+              .where((item) => item.id == session.planItemId)
+              .firstOrNull;
+    final weeklyPacket = planItem == null
+        ? null
+        : weeklyLessonPacketForWeek(planItem.weekNumber);
+    final previousAttempt = session.attempts.length > 1
+        ? session.attempts[session.attempts.length - 2]
+        : null;
+    final previousReview = session.reviews.isEmpty
+        ? null
+        : session.reviews.last;
+    final nextPlanItem = _nextPlanItemForSession(session);
+    final nextLesson = nextPlanItem == null
+        ? null
+        : weeklyLessonForPlanItem(nextPlanItem.id);
+
+    return {
+      'schema_version': 'manual-ai-eval-v1',
+      'session': {
+        'session_id': session.id,
+        'plan_item_id': session.planItemId,
+        'origin': sessionOriginToDb(session.origin),
+        'attempt_number': pendingAttempt.attemptNo,
+        'response_mode': responseModeToDb(pendingAttempt.responseMode),
+      },
+      'user_profile': profile == null
+          ? null
+          : {
+              'display_name': profile.displayName,
+              'role_title': profile.roleTitle,
+              'seniority_band': seniorityBandToDb(profile.seniorityBand),
+              'industry': profile.industry,
+              'timezone': profile.timezone,
+              'communication_contexts': profile.communicationContexts,
+              'goals': profile.goals,
+            },
+      'prompt': {
+        'id': session.prompt.id,
+        'slug': session.prompt.slug,
+        'title': session.prompt.title,
+        'category': promptCategoryToDb(session.prompt.category),
+        'scenario_context': session.prompt.scenarioContext,
+        'prompt_text': lesson?.aiPromptText ?? session.prompt.promptText,
+        'difficulty_tier': session.prompt.difficultyTier,
+        'target_duration_sec': session.prompt.targetDurationSec,
+        'target_word_range_min': session.prompt.targetWordRangeMin,
+        'target_word_range_max': session.prompt.targetWordRangeMax,
+        'pillar_weights': pillarWeightMapToDb(session.prompt.pillarWeights),
+        'behavior_targets': session.prompt.behaviorTargets,
+      },
+      'weekly_lesson': weeklyPacket == null
+          ? null
+          : {
+              'weekly_objective': weeklyPacket.weeklyObjective,
+              'development_summary': weeklyPacket.developmentSummary,
+              'lesson_title': lesson?.lessonTitle ?? '',
+              'lesson_body': lesson?.lessonBody ?? '',
+              'good_example': lesson?.goodExample ?? '',
+              'example_analysis': lesson?.exampleAnalysis ?? '',
+              'user_development_focus': lesson?.userDevelopmentFocus ?? '',
+              'pre_drill_checklist':
+                  lesson?.preDrillChecklist ?? const <String>[],
+              'drill_purpose': DrillGuidance.purposeFor(
+                prompt: session.prompt,
+                lesson: lesson,
+              ),
+              'success_signals': DrillGuidance.successSignalsFor(
+                prompt: session.prompt,
+                lesson: lesson,
+              ),
+              'ai_scenario_context':
+                  lesson?.aiScenarioContext ?? session.prompt.scenarioContext,
+              'ai_prompt_text':
+                  lesson?.aiPromptText ?? session.prompt.promptText,
+            },
+      'user_response': {
+        'response_text': pendingAttempt.responseText,
+        'word_count': pendingAttempt.wordCount,
+        'estimated_duration_seconds': pendingAttempt.durationSeconds,
+      },
+      'previous_attempt': previousAttempt == null || previousReview == null
+          ? null
+          : {
+              'response_text': previousAttempt.responseText,
+              'overall_score': previousReview.score.overallScore,
+              'biggest_issue': previousReview.feedback.biggestIssue,
+              'top_coaching_points': previousReview.feedback.topCoachingPoints,
+              'next_attempt_target': previousReview.feedback.nextAttemptTarget,
+            },
+      'next_scheduled_drill': nextPlanItem == null
+          ? null
+          : {
+              'plan_item_id': nextPlanItem.id,
+              'scheduled_for': nextPlanItem.scheduledFor.toIso8601String(),
+              'drill_type': nextPlanItem.drillType,
+              'user_development_focus': nextLesson?.userDevelopmentFocus ?? '',
+              'drill_purpose': nextLesson?.drillPurpose ?? '',
+              'success_signals': nextLesson?.successSignals ?? const <String>[],
+              'pre_drill_checklist':
+                  nextLesson?.preDrillChecklist ?? const <String>[],
+              'ai_scenario_context': nextLesson?.aiScenarioContext ?? '',
+              'ai_prompt_text': nextLesson?.aiPromptText ?? '',
+            },
+      'recent_same_topic_history': _recentSameTopicHistory(session),
+      'progress': _progress == null
+          ? null
+          : {
+              'current_level': communicationLevelToDb(_progress!.currentLevel),
+              'overall_score_ema': _progress!.overallScoreEma,
+              'readiness_score': _progress!.readinessScore,
+              'weekly_completion_rate': _progress!.weeklyCompletionRate,
+              'coaching_adoption_rate': _progress!.coachingAdoptionRate,
+              'difficulty_tolerance': _progress!.difficultyTolerance,
+              'missed_sessions': _progress!.missedSessions,
+            },
+    };
+  }
+
+  PlanItem? _nextPlanItemForSession(TrainingSession session) {
+    if (session.planItemId == null || _currentPlan == null) {
+      return null;
+    }
+
+    final sorted = [..._currentPlan!.currentVersion.items]
+      ..sort((a, b) {
+        final weekCompare = a.weekNumber.compareTo(b.weekNumber);
+        if (weekCompare != 0) {
+          return weekCompare;
+        }
+        final dayCompare = a.dayNumber.compareTo(b.dayNumber);
+        if (dayCompare != 0) {
+          return dayCompare;
+        }
+        return a.sequenceNumber.compareTo(b.sequenceNumber);
+      });
+    final currentIndex = sorted.indexWhere(
+      (item) => item.id == session.planItemId,
+    );
+    if (currentIndex == -1) {
+      return null;
+    }
+
+    for (var index = currentIndex + 1; index < sorted.length; index++) {
+      final candidate = sorted[index];
+      if (candidate.status == PlanItemStatus.scheduled) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  List<Map<String, dynamic>> _recentSameTopicHistory(TrainingSession session) {
+    final sameTopic =
+        _sessions
+            .where(
+              (candidate) =>
+                  candidate.id != session.id &&
+                  candidate.reviews.isNotEmpty &&
+                  candidate.prompt.category == session.prompt.category,
+            )
+            .toList()
+          ..sort((a, b) {
+            final left = a.completedAt ?? a.startedAt;
+            final right = b.completedAt ?? b.startedAt;
+            return right.compareTo(left);
+          });
+
+    return [
+      for (final candidate in sameTopic.take(4))
+        {
+          'session_id': candidate.id,
+          'prompt_title': candidate.prompt.title,
+          'response_text': candidate.attempts.isEmpty
+              ? ''
+              : candidate.attempts.last.responseText,
+          'overall_score': candidate.reviews.last.score.overallScore,
+          'biggest_issue': candidate.reviews.last.feedback.biggestIssue,
+          'next_attempt_target':
+              candidate.reviews.last.feedback.nextAttemptTarget,
+        },
+    ];
+  }
+
+  Future<void> _applyNextDayDrillUpdate(NextDayDrillUpdate? update) async {
+    if (update == null) {
+      return;
+    }
+
+    for (var index = 0; index < _weeklyLessonPackets.length; index++) {
+      final packet = _weeklyLessonPackets[index];
+      final lessonIndex = packet.drills.indexWhere(
+        (lesson) => lesson.planItemId == update.planItemId,
+      );
+      if (lessonIndex == -1) {
+        continue;
+      }
+
+      final lesson = packet.drills[lessonIndex];
+      final updatedLesson = lesson.copyWith(
+        userDevelopmentFocus:
+            _nonEmptyOrNull(update.userDevelopmentFocus) ??
+            lesson.userDevelopmentFocus,
+        drillPurpose:
+            _nonEmptyOrNull(update.drillPurpose) ?? lesson.drillPurpose,
+        successSignals: update.successSignals ?? lesson.successSignals,
+        preDrillChecklist: update.preDrillChecklist ?? lesson.preDrillChecklist,
+        aiScenarioContext:
+            _nonEmptyOrNull(update.aiScenarioContext) ??
+            lesson.aiScenarioContext,
+        aiPromptText:
+            _nonEmptyOrNull(update.aiPromptText) ?? lesson.aiPromptText,
+      );
+      final updatedDrills = [...packet.drills];
+      updatedDrills[lessonIndex] = updatedLesson;
+      final updatedPacket = packet.copyWith(
+        drills: updatedDrills,
+        rawImportText: _packetRawJson(packet.copyWith(drills: updatedDrills)),
+        updatedAt: DateTime.now(),
+      );
+
+      await _client
+          .from('weekly_lesson_packets')
+          .update({
+            'packet_payload': _packetPayload(updatedPacket),
+            'raw_import_text': updatedPacket.rawImportText,
+          })
+          .eq('id', packet.id);
+
+      _weeklyLessonPackets[index] = updatedPacket;
+      return;
+    }
+  }
+
+  Map<String, dynamic> _packetPayload(WeeklyLessonPacket packet) {
+    return {
+      'week_number': packet.weekNumber,
+      'weekly_objective': packet.weeklyObjective,
+      'development_summary': packet.developmentSummary,
+      'previous_week_analysis': packet.previousWeekAnalysis,
+      'previous_week_evaluations': [
+        for (final evaluation in packet.previousWeekEvaluations)
+          {
+            'session_id': evaluation.sessionId,
+            'ai_score': evaluation.aiScore,
+            'key_observations': evaluation.keyObservations,
+          },
+      ],
+      'drills': [
+        for (final lesson in packet.drills)
+          {
+            'plan_item_id': lesson.planItemId,
+            'lesson_title': lesson.lessonTitle,
+            'lesson_body': lesson.lessonBody,
+            'good_example': lesson.goodExample,
+            'example_analysis': lesson.exampleAnalysis,
+            'user_development_focus': lesson.userDevelopmentFocus,
+            'pre_drill_checklist': lesson.preDrillChecklist,
+            'drill_purpose': lesson.drillPurpose,
+            'success_signals': lesson.successSignals,
+            if (lesson.aiScenarioContext != null)
+              'ai_scenario_context': lesson.aiScenarioContext,
+            if (lesson.aiPromptText != null)
+              'ai_prompt_text': lesson.aiPromptText,
+          },
+      ],
+    };
+  }
+
+  String _packetRawJson(WeeklyLessonPacket packet) {
+    return const JsonEncoder.withIndent('  ').convert(_packetPayload(packet));
+  }
+
+  String? _nonEmptyOrNull(String? value) {
+    final trimmed = value?.trim() ?? '';
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  Future<WeeklyLessonPacket> _persistWeeklyLessonPacket({
+    required String userId,
+    required String planVersionId,
+    required int weekNumber,
+    required String rawJson,
+  }) async {
     final plan = _currentPlan;
     if (plan == null) {
       throw StateError('An active plan is required.');
@@ -799,8 +1241,8 @@ class SupabaseAppService extends AppService {
     final row = await _client
         .from('weekly_lesson_packets')
         .upsert({
-          'plan_version_id': plan.currentVersion.id,
-          'user_id': user.id,
+          'plan_version_id': planVersionId,
+          'user_id': userId,
           'week_number': validated.weekNumber,
           'weekly_objective': validated.weeklyObjective,
           'development_summary': validated.developmentSummary,

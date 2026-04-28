@@ -4,6 +4,7 @@ import 'package:ceo_communication_trainer/app/providers.dart';
 import 'package:ceo_communication_trainer/core/types/app_models.dart';
 import 'package:ceo_communication_trainer/core/types/app_types.dart';
 import 'package:ceo_communication_trainer/core/ui/shell_card.dart';
+import 'package:ceo_communication_trainer/features/training_session/domain/drill_guidance.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -184,11 +185,12 @@ class _DrillSessionScreenState extends ConsumerState<DrillSessionScreen> {
     if (plan == null) return null;
 
     final sessions = ref.read(sessionHistoryProvider);
-    final completedIds = sessions
-        .where((s) => s.isCompleted && s.planItemId != null)
-        .map((s) => s.planItemId!)
-        .toSet()
-      ..add(session.planItemId!);
+    final completedIds =
+        sessions
+            .where((s) => s.isCompleted && s.planItemId != null)
+            .map((s) => s.planItemId!)
+            .toSet()
+          ..add(session.planItemId!);
 
     final sorted = [...plan.currentVersion.items]
       ..sort((a, b) {
@@ -199,7 +201,9 @@ class _DrillSessionScreenState extends ConsumerState<DrillSessionScreen> {
         return a.sequenceNumber.compareTo(b.sequenceNumber);
       });
 
-    final currentIndex = sorted.indexWhere((item) => item.id == session.planItemId);
+    final currentIndex = sorted.indexWhere(
+      (item) => item.id == session.planItemId,
+    );
     if (currentIndex < 0) return null;
     for (var i = currentIndex + 1; i < sorted.length; i++) {
       if (!completedIds.contains(sorted[i].id)) return sorted[i].id;
@@ -217,9 +221,9 @@ class _DrillSessionScreenState extends ConsumerState<DrillSessionScreen> {
       context.go(nextId != null ? '/plan-item/$nextId/drill' : '/home');
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.toString())),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.toString())));
       }
     } finally {
       if (mounted) setState(() => _advancing = false);
@@ -351,14 +355,22 @@ class _DrillSessionScreenState extends ConsumerState<DrillSessionScreen> {
     final planItem = session.planItemId == null || currentPlan == null
         ? null
         : currentPlan.currentVersion.items
-            .where((item) => item.id == session.planItemId)
-            .firstOrNull;
+              .where((item) => item.id == session.planItemId)
+              .firstOrNull;
     final weeklyPacket = planItem == null
         ? null
         : ref.watch(weeklyLessonPacketByWeekProvider(planItem.weekNumber));
     final weeklyLesson = session.planItemId == null
         ? null
         : ref.watch(weeklyLessonForPlanItemProvider(session.planItemId!));
+    final drillPurpose = DrillGuidance.purposeFor(
+      prompt: session.prompt,
+      lesson: weeklyLesson,
+    );
+    final successSignals = DrillGuidance.successSignalsFor(
+      prompt: session.prompt,
+      lesson: weeklyLesson,
+    );
     final showLessonPrep =
         session.origin == SessionOrigin.dailyPlan &&
         weeklyPacket != null &&
@@ -410,14 +422,14 @@ class _DrillSessionScreenState extends ConsumerState<DrillSessionScreen> {
                   const SizedBox(height: 8),
                   Text(weeklyLesson.lessonBody),
                   const SizedBox(height: 16),
-                  Text('What good looks like', style: theme.textTheme.titleLarge),
+                  Text(
+                    'What good looks like',
+                    style: theme.textTheme.titleLarge,
+                  ),
                   const SizedBox(height: 8),
                   Text(weeklyLesson.goodExample),
                   const SizedBox(height: 12),
-                  Text(
-                    'Why it works',
-                    style: theme.textTheme.titleLarge,
-                  ),
+                  Text('Why it works', style: theme.textTheme.titleLarge),
                   const SizedBox(height: 8),
                   Text(weeklyLesson.exampleAnalysis),
                 ],
@@ -435,6 +447,10 @@ class _DrillSessionScreenState extends ConsumerState<DrillSessionScreen> {
                   const SizedBox(height: 8),
                   Text(weeklyLesson.userDevelopmentFocus),
                   const SizedBox(height: 16),
+                  Text('Drill purpose', style: theme.textTheme.titleLarge),
+                  const SizedBox(height: 8),
+                  Text(drillPurpose),
+                  const SizedBox(height: 16),
                   Text(
                     'Pre-drill checklist',
                     style: theme.textTheme.titleLarge,
@@ -444,6 +460,14 @@ class _DrillSessionScreenState extends ConsumerState<DrillSessionScreen> {
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text('• $item'),
+                    ),
+                  const SizedBox(height: 8),
+                  Text('Success signals', style: theme.textTheme.titleLarge),
+                  const SizedBox(height: 8),
+                  for (final signal in successSignals)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text('• $signal'),
                     ),
                 ],
               ),
@@ -495,6 +519,18 @@ class _DrillSessionScreenState extends ConsumerState<DrillSessionScreen> {
                   weeklyLesson?.aiPromptText ?? session.prompt.promptText,
                   style: theme.textTheme.bodyLarge,
                 ),
+                const SizedBox(height: 16),
+                Text('Drill purpose', style: theme.textTheme.titleMedium),
+                const SizedBox(height: 6),
+                Text(drillPurpose),
+                const SizedBox(height: 12),
+                Text('Success signals', style: theme.textTheme.titleMedium),
+                const SizedBox(height: 6),
+                for (final signal in successSignals)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text('• $signal'),
+                  ),
                 const SizedBox(height: 16),
                 Wrap(
                   spacing: 10,
@@ -558,16 +594,17 @@ class _DrillSessionScreenState extends ConsumerState<DrillSessionScreen> {
                     final wordCount = text.isEmpty
                         ? 0
                         : text
-                            .split(RegExp(r'\s+'))
-                            .where((w) => w.isNotEmpty)
-                            .length;
+                              .split(RegExp(r'\s+'))
+                              .where((w) => w.isNotEmpty)
+                              .length;
                     return Align(
                       alignment: Alignment.centerRight,
                       child: Text(
                         '$wordCount words',
                         style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurface
-                              .withValues(alpha: 0.6),
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.6,
+                          ),
                         ),
                       ),
                     );
@@ -605,7 +642,9 @@ class _DrillSessionScreenState extends ConsumerState<DrillSessionScreen> {
                     session.planItemId != null) ...[
                   const SizedBox(height: 12),
                   OutlinedButton(
-                    onPressed: _advancing ? null : () => _advanceToNext(session),
+                    onPressed: _advancing
+                        ? null
+                        : () => _advanceToNext(session),
                     child: Text(_advancing ? 'Moving on...' : 'Next drill'),
                   ),
                 ],

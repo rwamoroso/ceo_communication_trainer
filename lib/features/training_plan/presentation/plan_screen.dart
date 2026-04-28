@@ -61,8 +61,10 @@ class PlanScreen extends ConsumerWidget {
       });
     }
     final currentWeek =
-        (((DateTime.now().difference(plan.startDate).inDays) ~/ 7) + 1)
-            .clamp(1, 10);
+        (((DateTime.now().difference(plan.startDate).inDays) ~/ 7) + 1).clamp(
+          1,
+          10,
+        );
 
     return ListView(
       padding: const EdgeInsets.all(24),
@@ -77,7 +79,9 @@ class PlanScreen extends ConsumerWidget {
         for (final entry in sortedWeekEntries.take(7))
           Builder(
             builder: (context) {
-              final packet = ref.watch(weeklyLessonPacketByWeekProvider(entry.key));
+              final packet = ref.watch(
+                weeklyLessonPacketByWeekProvider(entry.key),
+              );
               return Padding(
                 padding: const EdgeInsets.only(bottom: 16),
                 child: ShellCard(
@@ -97,7 +101,9 @@ class PlanScreen extends ConsumerWidget {
                           const SizedBox(width: 8),
                           Chip(
                             label: Text(
-                              packet == null ? 'AI setup needed' : 'AI ready',
+                              packet == null
+                                  ? 'Question pack needed'
+                                  : 'Question pack ready',
                             ),
                           ),
                         ],
@@ -118,8 +124,8 @@ class PlanScreen extends ConsumerWidget {
                                 context.go('/plan/week/${entry.key}/setup'),
                             child: Text(
                               packet == null
-                                  ? 'Set up AI lesson pack'
-                                  : 'Refresh AI lesson pack',
+                                  ? 'Set up AI question pack'
+                                  : 'Refresh AI question pack',
                             ),
                           ),
                         ],

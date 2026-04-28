@@ -211,9 +211,7 @@ List<Pillar> pillarListFromDb(dynamic value) {
 
 Map<String, double> doubleMapFromDb(dynamic value) {
   final map = asMap(value);
-  return {
-    for (final entry in map.entries) entry.key: asDouble(entry.value),
-  };
+  return {for (final entry in map.entries) entry.key: asDouble(entry.value)};
 }
 
 Map<Pillar, double> pillarWeightMapFromDb(dynamic value) {
@@ -284,6 +282,7 @@ UserProfile userProfileFromRow(Map<String, dynamic> row) {
     preferredResponseMode: responseModeFromDb(
       row['preferred_response_mode']?.toString() ?? 'typed',
     ),
+    dailyReminderTime: row['daily_reminder_time']?.toString() ?? '',
     onboardingCompletedAt: row['onboarding_completed_at'] == null
         ? null
         : parseDbTimestamp(row['onboarding_completed_at']),
@@ -370,22 +369,26 @@ WeeklyLessonPacket weeklyLessonPacketFromRow(Map<String, dynamic> row) {
       exampleAnalysis: map['example_analysis']?.toString() ?? '',
       userDevelopmentFocus: map['user_development_focus']?.toString() ?? '',
       preDrillChecklist: stringListFromDb(map['pre_drill_checklist']),
-      aiScenarioContext:
-          (aiScenarioContext?.isNotEmpty == true) ? aiScenarioContext : null,
+      drillPurpose: map['drill_purpose']?.toString() ?? '',
+      successSignals: stringListFromDb(map['success_signals']),
+      aiScenarioContext: (aiScenarioContext?.isNotEmpty == true)
+          ? aiScenarioContext
+          : null,
       aiPromptText: (aiPromptText?.isNotEmpty == true) ? aiPromptText : null,
     );
   }).toList();
 
-  final previousWeekEvaluations = asList(
-    payload['previous_week_evaluations'],
-  ).map((entry) {
-    final map = asMap(entry);
-    return WeeklySessionEvaluation(
-      sessionId: map['session_id']?.toString() ?? '',
-      aiScore: asDouble(map['ai_score']),
-      keyObservations: stringListFromDb(map['key_observations']),
-    );
-  }).where((e) => e.sessionId.isNotEmpty).toList();
+  final previousWeekEvaluations = asList(payload['previous_week_evaluations'])
+      .map((entry) {
+        final map = asMap(entry);
+        return WeeklySessionEvaluation(
+          sessionId: map['session_id']?.toString() ?? '',
+          aiScore: asDouble(map['ai_score']),
+          keyObservations: stringListFromDb(map['key_observations']),
+        );
+      })
+      .where((e) => e.sessionId.isNotEmpty)
+      .toList();
 
   return WeeklyLessonPacket(
     id: row['id'].toString(),
@@ -403,8 +406,7 @@ WeeklyLessonPacket weeklyLessonPacketFromRow(Map<String, dynamic> row) {
     drills: drills,
     createdAt: parseDbTimestamp(row['created_at']),
     updatedAt: parseDbTimestamp(row['updated_at']),
-    previousWeekAnalysis:
-        payload['previous_week_analysis']?.toString() ?? '',
+    previousWeekAnalysis: payload['previous_week_analysis']?.toString() ?? '',
     previousWeekEvaluations: previousWeekEvaluations,
   );
 }
@@ -473,8 +475,12 @@ TrainingSession trainingSessionFromRow(
     bestAttemptNo: row['best_attempt_no'] == null
         ? null
         : asInt(row['best_attempt_no']),
-    finalScore: row['final_score'] == null ? null : asDouble(row['final_score']),
-    scoreDelta: row['score_delta'] == null ? null : asDouble(row['score_delta']),
+    finalScore: row['final_score'] == null
+        ? null
+        : asDouble(row['final_score']),
+    scoreDelta: row['score_delta'] == null
+        ? null
+        : asDouble(row['score_delta']),
   );
 }
 

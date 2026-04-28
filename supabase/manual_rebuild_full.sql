@@ -2,6 +2,7 @@
 -- Source:
 --   1) supabase/migrations/20260419190000_initial_schema.sql
 --   2) supabase/migrations/20260420101500_seed_prompts.sql
+--   3) supabase/migrations/20260428135923_add_daily_reminder_time.sql
 -- Run this in Supabase SQL Editor in order from top to bottom.
 
 -- Begin: 20260419190000_initial_schema.sql
@@ -75,6 +76,7 @@ create table public.profiles (
   goals jsonb not null default '[]'::jsonb,
   microphone_consent boolean not null default false,
   preferred_response_mode public.response_mode not null default 'typed',
+  daily_reminder_time text not null default '',
   onboarding_completed_at timestamptz,
   baseline_completed_at timestamptz,
   created_at timestamptz not null default timezone('utc', now()),

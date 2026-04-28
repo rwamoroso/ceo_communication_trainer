@@ -74,9 +74,13 @@ You are scoring one executive communication drill attempt.
 
 Rules:
 - Return JSON only.
+- Score the response against the drill purpose, success signals, prompt, and weekly lesson context.
+- Be honest and specific. Do not inflate scores to be encouraging.
+- Keep scores internally consistent with the written feedback.
 - Give at most 3 coaching points.
 - Keep the improved example concise enough to fit the target duration.
-- Do not contradict the numeric scores.
+- Use prior attempt feedback and same-topic history only to personalize coaching, not to overwrite what happened in this attempt.
+- For typed responses, filler_words_per_minute and words_per_minute can be null.
 
 Inputs:
 ${JSON.stringify(input, null, 2)}
@@ -89,14 +93,21 @@ Output shape:
     "structure": 60,
     "brevity": 55,
     "presence": 62,
-    "strategic_framing": null,
-    "pressure_response": null
+    "strategic_framing": 58,
+    "pressure_response": 54
   },
   "behavior_metrics": {
     "direct_answer_rate": 0.4,
     "bluf_usage_rate": 0.2,
+    "clean_three_point_structure_rate": 0.35,
+    "average_response_length_words": 96,
     "filler_words_per_minute": 8.0,
-    "words_per_minute": 152
+    "words_per_minute": 152,
+    "retry_count": 1,
+    "coaching_adoption_rate": 0.45,
+    "consistency": 0.58,
+    "missed_sessions": 0,
+    "difficulty_tolerance": 0.52
   },
   "biggest_issue": "You delayed the answer.",
   "secondary_issue": "Your middle section wandered.",
@@ -128,6 +139,8 @@ Goal:
 - Teach the topic before each drill starts.
 - Show what strong execution looks like.
 - Analyze the user's specific development areas on each topic using prior responses and coaching history.
+- Generate a short drill purpose and exactly 3 success signals for each drill so the user knows what the exercise is training.
+- Treat ai_scenario_context and ai_prompt_text as the exact scenario and question the user will see for next week's drills.
 
 Rules:
 - Return JSON only.
@@ -137,6 +150,8 @@ Rules:
 - Use recent same-topic history to call out recurring strengths and weaknesses.
 - Keep lesson content concise, practical, and coaching-oriented.
 - Every current-week plan item must appear exactly once in the drills array.
+- Write ai_scenario_context and ai_prompt_text for every drill.
+- success_signals must contain exactly 3 concrete, observable signals of a strong answer.
 
 Inputs:
 ${JSON.stringify(input, null, 2)}
@@ -154,10 +169,18 @@ Return this exact JSON shape:
       "good_example": "A strong example response for this drill.",
       "example_analysis": "Why the example works.",
       "user_development_focus": "How this user should improve on this topic based on prior responses.",
+      "drill_purpose": "One sentence explaining what this drill is training.",
+      "success_signals": [
+        "Concrete signal of a strong answer",
+        "Concrete signal of a strong answer",
+        "Concrete signal of a strong answer"
+      ],
       "pre_drill_checklist": [
         "Short checklist item",
         "Short checklist item"
-      ]
+      ],
+      "ai_scenario_context": "A realistic scenario paragraph tailored to the user's role and industry.",
+      "ai_prompt_text": "The specific question or prompt the user will respond to in this drill."
     }
   ]
 }

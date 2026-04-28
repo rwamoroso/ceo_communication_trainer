@@ -113,10 +113,7 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Today\'s best next move',
-                style: theme.textTheme.titleLarge,
-              ),
+              Text('Today\'s drill', style: theme.textTheme.titleLarge),
               const SizedBox(height: 8),
               Text(
                 primaryItem == null
@@ -128,6 +125,13 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen> {
               if (primaryItem != null) ...[
                 const SizedBox(height: 6),
                 Text(DateFormat('EEE, MMM d').format(primaryItem.scheduledFor)),
+                if (profile.dailyReminderTime.trim().isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Reminder set for ${_formatReminderTime(profile.dailyReminderTime)} local time',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ],
                 const SizedBox(height: 16),
                 ElevatedButton(
                   onPressed: () =>
@@ -188,5 +192,18 @@ class _HomeDashboardScreenState extends ConsumerState<HomeDashboardScreen> {
         ),
       ),
     );
+  }
+
+  String _formatReminderTime(String value) {
+    final parts = value.split(':');
+    if (parts.length != 2) {
+      return value;
+    }
+    final hour = int.tryParse(parts[0]);
+    final minute = int.tryParse(parts[1]);
+    if (hour == null || minute == null) {
+      return value;
+    }
+    return DateFormat.jm().format(DateTime(2026, 1, 1, hour, minute));
   }
 }

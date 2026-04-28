@@ -27,8 +27,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('AI setup needed'), findsWidgets);
-    expect(find.text('Set up AI lesson pack'), findsWidgets);
+    expect(find.text('Question pack needed'), findsWidgets);
+    expect(find.text('Set up AI question pack'), findsWidgets);
   });
 
   testWidgets('weekly drill shows lesson prep before response composer', (
@@ -59,9 +59,19 @@ void main() {
           planItemId: 'plan-item-1',
           lessonTitle: 'Answer first',
           lessonBody: 'State the recommendation in the first sentence.',
-          goodExample: 'My recommendation is to narrow scope and launch this week.',
-          exampleAnalysis: 'It answers immediately and keeps the structure tight.',
-          userDevelopmentFocus: 'Stop using a long setup before the recommendation.',
+          goodExample:
+              'My recommendation is to narrow scope and launch this week.',
+          exampleAnalysis:
+              'It answers immediately and keeps the structure tight.',
+          userDevelopmentFocus:
+              'Stop using a long setup before the recommendation.',
+          drillPurpose:
+              'Train direct answers so the recommendation lands in the opening sentence.',
+          successSignals: [
+            'Lead with the answer in the first sentence.',
+            'Keep the response to 55-85 words.',
+            'Use a simple structure with no more than three supporting points.',
+          ],
           preDrillChecklist: ['Lead with the answer', 'Use three reasons'],
         ),
       ],
@@ -96,6 +106,19 @@ void main() {
 
     expect(find.text('Weekly drill prep'), findsOneWidget);
     expect(find.text('Answer first'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('Drill purpose'),
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('Drill purpose'), findsOneWidget);
+    expect(
+      find.text(
+        'Train direct answers so the recommendation lands in the opening sentence.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Success signals'), findsOneWidget);
     expect(find.text('Response draft'), findsNothing);
 
     await tester.scrollUntilVisible(
@@ -108,6 +131,8 @@ void main() {
 
     expect(find.text('Response draft'), findsOneWidget);
     expect(find.text('Submit response'), findsOneWidget);
+    expect(find.text('Drill purpose'), findsOneWidget);
+    expect(find.text('Success signals'), findsOneWidget);
   });
 }
 
@@ -146,10 +171,28 @@ class _FakeTrainingRepository implements TrainingRepository {
   Future<String> buildWeeklyLessonPrompt(int weekNumber) async => 'prompt';
 
   @override
+  Future<String> buildSessionEvaluationPrompt(String sessionId) {
+    throw UnimplementedError();
+  }
+
+  @override
   Future<void> finalizeSession(String sessionId) async {}
 
   @override
   Future<WeeklyRecalibration> generateWeeklyRecalibration() {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<WeeklyLessonPacket> generateWeeklyLessonPacket(int weekNumber) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<TrainingSession> importSessionEvaluation({
+    required String sessionId,
+    required String rawJson,
+  }) {
     throw UnimplementedError();
   }
 

@@ -46,6 +46,8 @@ class ValidatedWeeklyLessonPacketImport {
             'example_analysis': drill.exampleAnalysis,
             'user_development_focus': drill.userDevelopmentFocus,
             'pre_drill_checklist': drill.preDrillChecklist,
+            'drill_purpose': drill.drillPurpose,
+            'success_signals': drill.successSignals,
             if (drill.aiScenarioContext != null)
               'ai_scenario_context': drill.aiScenarioContext,
             if (drill.aiPromptText != null)
@@ -76,7 +78,8 @@ class WeeklyLessonPacketEngine {
       previousWeekPacket: previousWeekPacket,
     );
 
-    final hasPreviousWeek = weekNumber > 1 &&
+    final hasPreviousWeek =
+        weekNumber > 1 &&
         (input['previous_week_history'] as List?)?.isNotEmpty == true;
 
     return '''
@@ -88,6 +91,7 @@ Goal:
 - Show what strong execution looks like.
 - Analyze the user's specific development areas on each topic using prior responses and coaching history.
 - Craft a unique, personalized drill question for each plan item based on the user's role, industry, and development focus.
+- Treat ai_scenario_context and ai_prompt_text as the exact scenario and question that will be shown to the user next week.
 ${hasPreviousWeek ? '- Evaluate the prior week\'s responses and provide honest AI scoring and observations.' : ''}
 
 Rules:
@@ -99,6 +103,8 @@ Rules:
 - Keep lesson content concise, practical, and coaching-oriented.
 - Every current-week plan item must appear exactly once in the drills array.
 - Craft ai_scenario_context and ai_prompt_text for every drill — make them specific to the user's industry and role, not generic.
+- Add drill_purpose for every drill as one sentence explaining what that exercise is training.
+- Add exactly 3 success_signals for every drill so the user knows what a strong answer looks like.
 
 Inputs:
 ${_prettyJson.convert(input)}
@@ -122,6 +128,12 @@ Return this exact JSON shape:
         "Short checklist item",
         "Short checklist item"
       ],
+      "drill_purpose": "One sentence explaining what this drill is training.",
+      "success_signals": [
+        "Concrete sign of a strong answer",
+        "Concrete sign of a strong answer",
+        "Concrete sign of a strong answer"
+      ],
       "ai_scenario_context": "A realistic scenario paragraph tailored to the user's role and industry.",
       "ai_prompt_text": "The specific question or prompt the user will respond to in this drill."
     }
@@ -143,9 +155,10 @@ Return this exact JSON shape:
       throw StateError('Week $weekNumber has no scheduled plan items.');
     }
 
-    final previousWeekIds = _weekItems(plan, weekNumber - 1)
-        .map((item) => item.id)
-        .toSet();
+    final previousWeekIds = _weekItems(
+      plan,
+      weekNumber - 1,
+    ).map((item) => item.id).toSet();
     final currentCategories = weekItems.map((item) => item.drillType).toSet();
     final currentPromptIds = weekItems.map((item) => item.promptId).toSet();
 
@@ -165,7 +178,9 @@ Return this exact JSON shape:
               (session) =>
                   session.reviews.isNotEmpty &&
                   (currentPromptIds.contains(session.prompt.id) ||
-                      currentCategories.contains(session.prompt.category.label)),
+                      currentCategories.contains(
+                        session.prompt.category.label,
+                      )),
             )
             .toList()
           ..sort((a, b) {
@@ -189,7 +204,9 @@ Return this exact JSON shape:
               'scheduled_for': item.scheduledFor.toIso8601String(),
               'drill_type': item.drillType,
               'difficulty_tier': item.difficultyTier,
-              'focus_pillars': item.focusPillars.map((pillar) => pillar.label).toList(),
+              'focus_pillars': item.focusPillars
+                  .map((pillar) => pillar.label)
+                  .toList(),
               'target_metrics': item.targetMetrics,
             },
         ],
@@ -274,7 +291,8 @@ Return this exact JSON shape:
 
     final weeklyObjective = _requiredString(map, 'weekly_objective');
     final developmentSummary = _requiredString(map, 'development_summary');
-    final previousWeekAnalysis = map['previous_week_analysis']?.toString().trim() ?? '';
+    final previousWeekAnalysis =
+        map['previous_week_analysis']?.toString().trim() ?? '';
 
     final previousWeekEvaluations = <WeeklySessionEvaluation>[];
     final evalList = map['previous_week_evaluations'];
@@ -289,9 +307,9 @@ Return this exact JSON shape:
               : double.tryParse(e['ai_score']?.toString() ?? '') ?? 0;
           final observations = (e['key_observations'] is List)
               ? (e['key_observations'] as List)
-                  .map((o) => o.toString())
-                  .where((o) => o.isNotEmpty)
-                  .toList()
+                    .map((o) => o.toString())
+                    .where((o) => o.isNotEmpty)
+                    .toList()
               : <String>[];
           previousWeekEvaluations.add(
             WeeklySessionEvaluation(
@@ -316,7 +334,9 @@ Return this exact JSON shape:
     for (var index = 0; index < drillsValue.length; index++) {
       final row = drillsValue[index];
       if (row is! Map) {
-        throw FormatException('Drill entry ${index + 1} must be a JSON object.');
+        throw FormatException(
+          'Drill entry ${index + 1} must be a JSON object.',
+        );
       }
       final drill = Map<String, dynamic>.from(row);
       final planItemId = _requiredString(drill, 'plan_item_id');
@@ -348,6 +368,22 @@ Return this exact JSON shape:
         );
       }
 
+      final successSignalsValue = drill['success_signals'];
+      if (successSignalsValue is! List) {
+        throw FormatException(
+          'Drill entry ${index + 1} must include a "success_signals" array.',
+        );
+      }
+      final successSignals = successSignalsValue
+          .map((item) => item.toString().trim())
+          .where((item) => item.isNotEmpty)
+          .toList();
+      if (successSignals.length != 3) {
+        throw FormatException(
+          'Drill entry ${index + 1} must include exactly 3 success_signals.',
+        );
+      }
+
       final aiScenarioContext = drill['ai_scenario_context']?.toString().trim();
       final aiPromptText = drill['ai_prompt_text']?.toString().trim();
 
@@ -363,10 +399,14 @@ Return this exact JSON shape:
             'user_development_focus',
           ),
           preDrillChecklist: checklist,
-          aiScenarioContext:
-              (aiScenarioContext?.isNotEmpty == true) ? aiScenarioContext : null,
-          aiPromptText:
-              (aiPromptText?.isNotEmpty == true) ? aiPromptText : null,
+          drillPurpose: _requiredString(drill, 'drill_purpose'),
+          successSignals: successSignals,
+          aiScenarioContext: (aiScenarioContext?.isNotEmpty == true)
+              ? aiScenarioContext
+              : null,
+          aiPromptText: (aiPromptText?.isNotEmpty == true)
+              ? aiPromptText
+              : null,
         ),
       );
     }
@@ -407,7 +447,8 @@ Return this exact JSON shape:
     final review = session.reviews.isEmpty ? null : session.reviews.last;
     final attempt = session.attempts.isEmpty
         ? null
-        : session.attempts[(session.bestAttemptNo ?? session.attempts.length) - 1];
+        : session.attempts[(session.bestAttemptNo ?? session.attempts.length) -
+              1];
     return {
       'session_id': session.id,
       'plan_item_id': session.planItemId,
