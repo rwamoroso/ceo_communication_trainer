@@ -23,6 +23,8 @@ class WeeklyLessonSetupScreen extends ConsumerStatefulWidget {
 class _WeeklyLessonSetupScreenState
     extends ConsumerState<WeeklyLessonSetupScreen> {
   final _importController = TextEditingController();
+  final _promptController = TextEditingController();
+  final _promptFocusNode = FocusNode();
   bool _loadingPrompt = false;
   bool _importing = false;
   bool _hydratedFromExistingPacket = false;
@@ -33,6 +35,8 @@ class _WeeklyLessonSetupScreenState
   @override
   void dispose() {
     _importController.dispose();
+    _promptController.dispose();
+    _promptFocusNode.dispose();
     super.dispose();
   }
 
@@ -46,6 +50,10 @@ class _WeeklyLessonSetupScreenState
           .read(trainingRepositoryProvider)
           .buildWeeklyLessonPrompt(widget.weekNumber);
       if (!mounted) return;
+      _promptController.value = TextEditingValue(
+        text: prompt,
+        selection: const TextSelection.collapsed(offset: 0),
+      );
       setState(() => _prompt = prompt);
     } catch (error) {
       if (!mounted) return;
@@ -67,6 +75,20 @@ class _WeeklyLessonSetupScreenState
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('Prompt copied.')));
+  }
+
+  Future<void> _selectAllPrompt() async {
+    final prompt = _promptController.text;
+    if (prompt.isEmpty) {
+      return;
+    }
+    _promptFocusNode.requestFocus();
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted) return;
+    _promptController.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: prompt.length,
+    );
   }
 
   Future<void> _importPacket() async {
@@ -163,11 +185,6 @@ class _WeeklyLessonSetupScreenState
                             : 'Build AI question prompt',
                       ),
                     ),
-                    if (_prompt != null)
-                      OutlinedButton(
-                        onPressed: _copyPrompt,
-                        child: const Text('Copy prompt'),
-                      ),
                     OutlinedButton(
                       onPressed: () => context.go('/plan'),
                       child: const Text('Return to plan'),
@@ -218,23 +235,6 @@ class _WeeklyLessonSetupScreenState
               ),
             ),
           ],
-          if (_prompt != null) ...[
-            const SizedBox(height: 16),
-            ShellCard(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('AI question prompt', style: theme.textTheme.titleLarge),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Copy this prompt into your AI tool to generate next week\'s personalized drill questions and lesson packet.',
-                  ),
-                  const SizedBox(height: 12),
-                  SelectableText(_prompt!),
-                ],
-              ),
-            ),
-          ],
           const SizedBox(height: 16),
           ShellCard(
             child: Column(
@@ -273,6 +273,52 @@ class _WeeklyLessonSetupScreenState
               ],
             ),
           ),
+          if (_prompt != null) ...[
+            const SizedBox(height: 16),
+            ShellCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('AI question prompt', style: theme.textTheme.titleLarge),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Copy this prompt into your AI tool to generate next week\'s personalized drill questions and lesson packet.',
+                  ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      OutlinedButton(
+                        onPressed: _copyPrompt,
+                        child: const Text('Copy prompt'),
+                      ),
+                      OutlinedButton(
+                        onPressed: _selectAllPrompt,
+                        child: const Text('Select all'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    height: 220,
+                    child: TextField(
+                      controller: _promptController,
+                      focusNode: _promptFocusNode,
+                      readOnly: true,
+                      maxLines: null,
+                      expands: true,
+                      textAlignVertical: TextAlignVertical.top,
+                      decoration: const InputDecoration(
+                        border: OutlineInputBorder(),
+                        contentPadding: EdgeInsets.all(12),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (packet != null) ...[
             const SizedBox(height: 16),
             ShellCard(

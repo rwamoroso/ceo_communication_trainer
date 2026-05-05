@@ -134,6 +134,99 @@ void main() {
     expect(find.text('Drill purpose'), findsOneWidget);
     expect(find.text('Success signals'), findsOneWidget);
   });
+
+  testWidgets('submitted drills require AI coaching before another step', (
+    WidgetTester tester,
+  ) async {
+    final plan = _plan();
+    final packet = WeeklyLessonPacket(
+      id: 'packet-1',
+      planVersionId: plan.currentVersion.id,
+      weekNumber: 1,
+      weeklyObjective: 'Lead with the recommendation and keep the logic crisp.',
+      developmentSummary:
+          'Recent answers bury the recommendation and lose structure under pressure.',
+      rawImportText: '{"week_number":1}',
+      drills: const [
+        WeeklyDrillLesson(
+          planItemId: 'plan-item-1',
+          lessonTitle: 'Answer first',
+          lessonBody: 'State the recommendation in the first sentence.',
+          goodExample:
+              'My recommendation is to narrow scope and launch this week.',
+          exampleAnalysis:
+              'It answers immediately and keeps the structure tight.',
+          userDevelopmentFocus:
+              'Stop using a long setup before the recommendation.',
+          drillPurpose:
+              'Train direct answers so the recommendation lands in the opening sentence.',
+          successSignals: [
+            'Lead with the answer in the first sentence.',
+            'Keep the response to 55-85 words.',
+            'Use a simple structure with no more than three supporting points.',
+          ],
+          preDrillChecklist: ['Lead with the answer', 'Use three reasons'],
+        ),
+      ],
+      createdAt: DateTime(2026, 4, 23),
+      updatedAt: DateTime(2026, 4, 23),
+    );
+    final session = TrainingSession(
+      id: 'session-1',
+      userId: 'user-1',
+      prompt: _prompt(),
+      origin: SessionOrigin.dailyPlan,
+      status: SessionStatus.inProgress,
+      startedAt: DateTime(2026, 4, 23),
+      planItemId: 'plan-item-1',
+      attempts: [
+        SessionAttempt(
+          id: 'attempt-1',
+          attemptNo: 1,
+          responseMode: ResponseMode.typed,
+          responseText:
+              'My recommendation is to narrow scope this week so we protect quality, reduce rework, and keep leadership trust intact.',
+          durationSeconds: 40,
+          wordCount: 18,
+          submittedAt: DateTime(2026, 4, 23),
+        ),
+      ],
+      reviews: const [],
+    );
+    final repository = _FakeTrainingRepository(
+      currentPlan: plan,
+      weeklyLessonPackets: [packet],
+      sessions: [session],
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trainingRepositoryProvider.overrideWithValue(repository),
+          currentPlanProvider.overrideWithValue(plan),
+          sessionHistoryProvider.overrideWithValue([session]),
+          weeklyLessonPacketByWeekProvider.overrideWith((ref, weekNumber) {
+            return weekNumber == packet.weekNumber ? packet : null;
+          }),
+          weeklyLessonForPlanItemProvider.overrideWith((ref, planItemId) {
+            return planItemId == 'plan-item-1' ? packet.drills.first : null;
+          }),
+        ],
+        child: MaterialApp(
+          home: DrillSessionScreen.planItem(planItemId: 'plan-item-1'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('AI coaching is required before the next step.'),
+      findsOneWidget,
+    );
+    expect(find.text('Open feedback'), findsOneWidget);
+    expect(find.text('Response draft'), findsNothing);
+    expect(find.text('Submit response'), findsNothing);
+  });
 }
 
 class _FakeTrainingRepository implements TrainingRepository {

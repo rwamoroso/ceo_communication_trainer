@@ -43,7 +43,6 @@ class _DrillSessionScreenState extends ConsumerState<DrillSessionScreen> {
   final _responseController = TextEditingController();
   bool _opening = false;
   bool _submitting = false;
-  bool _advancing = false;
   bool _lessonAcknowledged = false;
   String? _openError;
   String? _sessionIdHint;
@@ -81,6 +80,10 @@ class _DrillSessionScreenState extends ConsumerState<DrillSessionScreen> {
 
   void _handleDraftChanged() {
     _draftCache[_routeIdentity] = _responseController.text;
+  }
+
+  bool _hasPendingEvaluation(TrainingSession session) {
+    return session.attempts.length > session.reviews.length;
   }
 
   // Kicks off session creation if it isn't in the session list yet.
@@ -179,58 +182,20 @@ class _DrillSessionScreenState extends ConsumerState<DrillSessionScreen> {
     super.dispose();
   }
 
-  String? _findNextPlanItemId(TrainingSession session) {
-    if (session.planItemId == null) return null;
-    final plan = ref.read(currentPlanProvider);
-    if (plan == null) return null;
-
-    final sessions = ref.read(sessionHistoryProvider);
-    final completedIds =
-        sessions
-            .where((s) => s.isCompleted && s.planItemId != null)
-            .map((s) => s.planItemId!)
-            .toSet()
-          ..add(session.planItemId!);
-
-    final sorted = [...plan.currentVersion.items]
-      ..sort((a, b) {
-        final w = a.weekNumber.compareTo(b.weekNumber);
-        if (w != 0) return w;
-        final d = a.dayNumber.compareTo(b.dayNumber);
-        if (d != 0) return d;
-        return a.sequenceNumber.compareTo(b.sequenceNumber);
-      });
-
-    final currentIndex = sorted.indexWhere(
-      (item) => item.id == session.planItemId,
-    );
-    if (currentIndex < 0) return null;
-    for (var i = currentIndex + 1; i < sorted.length; i++) {
-      if (!completedIds.contains(sorted[i].id)) return sorted[i].id;
-    }
-    return null;
-  }
-
-  Future<void> _advanceToNext(TrainingSession session) async {
-    if (_advancing) return;
-    setState(() => _advancing = true);
-    try {
-      await ref.read(trainingRepositoryProvider).finalizeSession(session.id);
-      if (!mounted) return;
-      final nextId = _findNextPlanItemId(session);
-      context.go(nextId != null ? '/plan-item/$nextId/drill' : '/home');
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(e.toString())));
-      }
-    } finally {
-      if (mounted) setState(() => _advancing = false);
-    }
-  }
-
   Future<void> _submit(TrainingSession session) async {
+    if (_hasPendingEvaluation(session)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Import AI coaching for this response before retrying the drill.',
+            ),
+          ),
+        );
+        context.go('/session/${session.id}/feedback');
+      }
+      return;
+    }
     if (session.attempts.length >= 2) {
       debugPrint(
         'drill.submit.blocked session=${session.id} reason=attempt_limit '
@@ -351,6 +316,66 @@ class _DrillSessionScreenState extends ConsumerState<DrillSessionScreen> {
     }
 
     final lastReview = session.reviews.isNotEmpty ? session.reviews.last : null;
+    if (_hasPendingEvaluation(session)) {
+      final pendingAttempt = session.attempts.last;
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Session coaching'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.home_outlined),
+              tooltip: 'Home',
+              onPressed: () => context.go('/home'),
+            ),
+          ],
+        ),
+        body: ListView(
+          padding: const EdgeInsets.all(24),
+          children: [
+            ShellCard(
+              backgroundColor: Theme.of(
+                context,
+              ).colorScheme.primary.withValues(alpha: 0.10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'AI coaching is required before the next step.',
+                    style: theme.textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'This drill already has a saved response waiting for AI scoring. Open feedback, build the scoring prompt, and paste the strict JSON result before retrying or finishing the session.',
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Attempt ${pendingAttempt.attemptNo} • ${pendingAttempt.wordCount} words',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            ShellCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Saved response', style: theme.textTheme.titleLarge),
+                  const SizedBox(height: 12),
+                  SelectableText(pendingAttempt.responseText),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton(
+              onPressed: () => context.go('/session/${session.id}/feedback'),
+              child: const Text('Open feedback'),
+            ),
+          ],
+        ),
+      );
+    }
+
     final currentPlan = ref.watch(currentPlanProvider);
     final planItem = session.planItemId == null || currentPlan == null
         ? null
@@ -636,16 +661,6 @@ class _DrillSessionScreenState extends ConsumerState<DrillSessionScreen> {
                     onPressed: () =>
                         context.go('/session/${session.id}/feedback'),
                     child: const Text('Open feedback'),
-                  ),
-                ],
-                if (session.attempts.isNotEmpty &&
-                    session.planItemId != null) ...[
-                  const SizedBox(height: 12),
-                  OutlinedButton(
-                    onPressed: _advancing
-                        ? null
-                        : () => _advanceToNext(session),
-                    child: Text(_advancing ? 'Moving on...' : 'Next drill'),
                   ),
                 ],
               ],

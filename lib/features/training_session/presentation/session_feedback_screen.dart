@@ -19,6 +19,8 @@ class SessionFeedbackScreen extends ConsumerStatefulWidget {
 
 class _SessionFeedbackScreenState extends ConsumerState<SessionFeedbackScreen> {
   final _importController = TextEditingController();
+  final _promptController = TextEditingController();
+  final _promptFocusNode = FocusNode();
 
   bool _hydrating = false;
   bool _loadingPrompt = false;
@@ -40,6 +42,8 @@ class _SessionFeedbackScreenState extends ConsumerState<SessionFeedbackScreen> {
   @override
   void dispose() {
     _importController.dispose();
+    _promptController.dispose();
+    _promptFocusNode.dispose();
     super.dispose();
   }
 
@@ -123,6 +127,10 @@ class _SessionFeedbackScreenState extends ConsumerState<SessionFeedbackScreen> {
           .read(trainingRepositoryProvider)
           .buildSessionEvaluationPrompt(widget.sessionId);
       if (!mounted) return;
+      _promptController.value = TextEditingValue(
+        text: prompt,
+        selection: const TextSelection.collapsed(offset: 0),
+      );
       setState(() => _prompt = prompt);
     } catch (error) {
       if (!mounted) return;
@@ -144,6 +152,20 @@ class _SessionFeedbackScreenState extends ConsumerState<SessionFeedbackScreen> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(const SnackBar(content: Text('Prompt copied.')));
+  }
+
+  Future<void> _selectAllPrompt() async {
+    final prompt = _promptController.text;
+    if (prompt.isEmpty) {
+      return;
+    }
+    _promptFocusNode.requestFocus();
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted) return;
+    _promptController.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: prompt.length,
+    );
   }
 
   Future<void> _importEvaluation() async {
@@ -416,11 +438,6 @@ class _SessionFeedbackScreenState extends ConsumerState<SessionFeedbackScreen> {
                               : 'Build scoring prompt',
                         ),
                       ),
-                      if (_prompt != null)
-                        OutlinedButton(
-                          onPressed: _copyPrompt,
-                          child: const Text('Copy prompt'),
-                        ),
                     ],
                   ),
                   if (_promptError != null) ...[
@@ -431,10 +448,6 @@ class _SessionFeedbackScreenState extends ConsumerState<SessionFeedbackScreen> {
                         color: theme.colorScheme.error,
                       ),
                     ),
-                  ],
-                  if (_prompt != null) ...[
-                    const SizedBox(height: 16),
-                    SelectableText(_prompt!),
                   ],
                 ],
               ),
@@ -480,6 +493,52 @@ class _SessionFeedbackScreenState extends ConsumerState<SessionFeedbackScreen> {
                 ],
               ),
             ),
+            if (_prompt != null) ...[
+              const SizedBox(height: 16),
+              ShellCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Prompt text', style: theme.textTheme.titleLarge),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Use the smaller preview below if you want to inspect the full prompt before pasting it into your AI tool.',
+                    ),
+                    const SizedBox(height: 16),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        OutlinedButton(
+                          onPressed: _copyPrompt,
+                          child: const Text('Copy prompt'),
+                        ),
+                        OutlinedButton(
+                          onPressed: _selectAllPrompt,
+                          child: const Text('Select all'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      height: 220,
+                      child: TextField(
+                        controller: _promptController,
+                        focusNode: _promptFocusNode,
+                        readOnly: true,
+                        maxLines: null,
+                        expands: true,
+                        textAlignVertical: TextAlignVertical.top,
+                        decoration: const InputDecoration(
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.all(12),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
             Text(
               canRetryLater

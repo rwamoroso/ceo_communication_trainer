@@ -350,6 +350,11 @@ class InMemoryAppService extends AppService
         'This session already has two attempts. Open feedback and finish the session.',
       );
     }
+    if (session.attempts.length > session.reviews.length) {
+      throw StateError(
+        'Import AI coaching for the latest attempt before submitting another response.',
+      );
+    }
     final nextAttemptNo = session.attempts.length + 1;
     final wordCount = _wordCount(responseText);
     final estimatedDuration = max(
@@ -430,7 +435,12 @@ class InMemoryAppService extends AppService
     if (index == -1) return;
 
     final session = _sessions[index];
-    if (session.reviews.isEmpty) return;
+    if (session.reviews.isEmpty ||
+        session.attempts.length > session.reviews.length) {
+      throw StateError(
+        'Import AI coaching for the latest attempt before finishing this session.',
+      );
+    }
 
     final bestReview = session.reviews.reduce(
       (current, next) => current.score.overallScore >= next.score.overallScore

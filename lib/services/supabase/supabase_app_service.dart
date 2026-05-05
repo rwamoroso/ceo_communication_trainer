@@ -529,6 +529,11 @@ class SupabaseAppService extends AppService {
         'This session already has two attempts. Open feedback and finish the session.',
       );
     }
+    if (session.attempts.length > session.reviews.length) {
+      throw StateError(
+        'Import AI coaching for the latest attempt before submitting another response.',
+      );
+    }
     final nextAttemptNo = session.attempts.length + 1;
     final trimmedText = responseText.trim();
     final wordCount = _wordCount(trimmedText);
@@ -712,8 +717,11 @@ class SupabaseAppService extends AppService {
     }
 
     final session = _sessions[sessionIndex];
-    if (session.reviews.isEmpty) {
-      return;
+    if (session.reviews.isEmpty ||
+        session.attempts.length > session.reviews.length) {
+      throw StateError(
+        'Import AI coaching for the latest attempt before finishing this session.',
+      );
     }
 
     final bestReview = session.reviews.reduce(
