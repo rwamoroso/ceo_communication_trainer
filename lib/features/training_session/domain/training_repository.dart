@@ -8,6 +8,11 @@ abstract class TrainingRepository {
   CommunicationBaseline? get baselineSummary;
   List<TrainingSession> get sessions;
   List<WeeklyRecalibration> get recalibrations;
+  List<WeeklyLessonPacket> get weeklyLessonPackets;
+
+  WeeklyLessonPacket? weeklyLessonPacketForWeek(int weekNumber);
+
+  WeeklyDrillLesson? weeklyLessonForPlanItem(String planItemId);
 
   Future<TrainingSession> openBaselineSession(int index);
 
@@ -21,7 +26,23 @@ abstract class TrainingRepository {
     required ResponseMode responseMode,
   });
 
+  Future<String> buildSessionEvaluationPrompt(String sessionId);
+
+  Future<TrainingSession> importSessionEvaluation({
+    required String sessionId,
+    required String rawJson,
+  });
+
   Future<void> finalizeSession(String sessionId);
 
   Future<WeeklyRecalibration> generateWeeklyRecalibration();
+
+  Future<String> buildWeeklyLessonPrompt(int weekNumber);
+
+  Future<WeeklyLessonPacket> generateWeeklyLessonPacket(int weekNumber);
+
+  Future<WeeklyLessonPacket> importWeeklyLessonPacket({
+    required int weekNumber,
+    required String rawJson,
+  });
 }

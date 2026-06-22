@@ -11,4 +11,6 @@ abstract class AppService extends ChangeNotifier
         TrainingRepository,
         ProgressRepository {
   bool get isLoading;
+
+  Future<void> reload();
 }

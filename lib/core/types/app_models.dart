@@ -20,6 +20,7 @@ class UserProfile {
     required this.goals,
     required this.microphoneConsent,
     required this.preferredResponseMode,
+    this.dailyReminderTime = '',
     this.onboardingCompletedAt,
     this.baselineCompletedAt,
   });
@@ -35,6 +36,7 @@ class UserProfile {
   final List<String> goals;
   final bool microphoneConsent;
   final ResponseMode preferredResponseMode;
+  final String dailyReminderTime;
   final DateTime? onboardingCompletedAt;
   final DateTime? baselineCompletedAt;
 
@@ -52,6 +54,7 @@ class UserProfile {
     List<String>? goals,
     bool? microphoneConsent,
     ResponseMode? preferredResponseMode,
+    String? dailyReminderTime,
     DateTime? onboardingCompletedAt,
     DateTime? baselineCompletedAt,
   }) {
@@ -69,6 +72,7 @@ class UserProfile {
       microphoneConsent: microphoneConsent ?? this.microphoneConsent,
       preferredResponseMode:
           preferredResponseMode ?? this.preferredResponseMode,
+      dailyReminderTime: dailyReminderTime ?? this.dailyReminderTime,
       onboardingCompletedAt:
           onboardingCompletedAt ?? this.onboardingCompletedAt,
       baselineCompletedAt: baselineCompletedAt ?? this.baselineCompletedAt,
@@ -202,6 +206,135 @@ class TrainingPlan {
       status: status ?? this.status,
       currentVersion: currentVersion ?? this.currentVersion,
       previousVersions: previousVersions ?? this.previousVersions,
+    );
+  }
+}
+
+class WeeklySessionEvaluation {
+  const WeeklySessionEvaluation({
+    required this.sessionId,
+    required this.aiScore,
+    required this.keyObservations,
+  });
+
+  final String sessionId;
+  final double aiScore;
+  final List<String> keyObservations;
+}
+
+class WeeklyDrillLesson {
+  const WeeklyDrillLesson({
+    required this.planItemId,
+    required this.lessonTitle,
+    required this.lessonBody,
+    required this.goodExample,
+    required this.exampleAnalysis,
+    required this.userDevelopmentFocus,
+    required this.preDrillChecklist,
+    this.drillPurpose = '',
+    this.successSignals = const [],
+    this.aiScenarioContext,
+    this.aiPromptText,
+  });
+
+  final String planItemId;
+  final String lessonTitle;
+  final String lessonBody;
+  final String goodExample;
+  final String exampleAnalysis;
+  final String userDevelopmentFocus;
+  final List<String> preDrillChecklist;
+  final String drillPurpose;
+  final List<String> successSignals;
+  final String? aiScenarioContext;
+  final String? aiPromptText;
+
+  WeeklyDrillLesson copyWith({
+    String? lessonTitle,
+    String? lessonBody,
+    String? goodExample,
+    String? exampleAnalysis,
+    String? userDevelopmentFocus,
+    List<String>? preDrillChecklist,
+    String? drillPurpose,
+    List<String>? successSignals,
+    String? aiScenarioContext,
+    String? aiPromptText,
+  }) {
+    return WeeklyDrillLesson(
+      planItemId: planItemId,
+      lessonTitle: lessonTitle ?? this.lessonTitle,
+      lessonBody: lessonBody ?? this.lessonBody,
+      goodExample: goodExample ?? this.goodExample,
+      exampleAnalysis: exampleAnalysis ?? this.exampleAnalysis,
+      userDevelopmentFocus: userDevelopmentFocus ?? this.userDevelopmentFocus,
+      preDrillChecklist: preDrillChecklist ?? this.preDrillChecklist,
+      drillPurpose: drillPurpose ?? this.drillPurpose,
+      successSignals: successSignals ?? this.successSignals,
+      aiScenarioContext: aiScenarioContext ?? this.aiScenarioContext,
+      aiPromptText: aiPromptText ?? this.aiPromptText,
+    );
+  }
+}
+
+class WeeklyLessonPacket {
+  const WeeklyLessonPacket({
+    required this.id,
+    required this.planVersionId,
+    required this.weekNumber,
+    required this.weeklyObjective,
+    required this.developmentSummary,
+    required this.rawImportText,
+    required this.drills,
+    required this.createdAt,
+    required this.updatedAt,
+    this.previousWeekAnalysis = '',
+    this.previousWeekEvaluations = const [],
+  });
+
+  final String id;
+  final String planVersionId;
+  final int weekNumber;
+  final String weeklyObjective;
+  final String developmentSummary;
+  final String rawImportText;
+  final List<WeeklyDrillLesson> drills;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  final String previousWeekAnalysis;
+  final List<WeeklySessionEvaluation> previousWeekEvaluations;
+
+  WeeklyDrillLesson? lessonForPlanItem(String planItemId) {
+    for (final lesson in drills) {
+      if (lesson.planItemId == planItemId) {
+        return lesson;
+      }
+    }
+    return null;
+  }
+
+  WeeklyLessonPacket copyWith({
+    String? weeklyObjective,
+    String? developmentSummary,
+    String? rawImportText,
+    List<WeeklyDrillLesson>? drills,
+    DateTime? updatedAt,
+    String? previousWeekAnalysis,
+    List<WeeklySessionEvaluation>? previousWeekEvaluations,
+  }) {
+    return WeeklyLessonPacket(
+      id: id,
+      planVersionId: planVersionId,
+      weekNumber: weekNumber,
+      weeklyObjective: weeklyObjective ?? this.weeklyObjective,
+      developmentSummary: developmentSummary ?? this.developmentSummary,
+      rawImportText: rawImportText ?? this.rawImportText,
+      drills: drills ?? this.drills,
+      createdAt: createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      previousWeekAnalysis: previousWeekAnalysis ?? this.previousWeekAnalysis,
+      previousWeekEvaluations:
+          previousWeekEvaluations ?? this.previousWeekEvaluations,
     );
   }
 }

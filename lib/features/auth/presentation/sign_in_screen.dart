@@ -24,6 +24,49 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
     super.dispose();
   }
 
+  Future<void> _forgotPassword() async {
+    final emailController = TextEditingController(text: _emailController.text);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reset password'),
+        content: TextField(
+          controller: emailController,
+          keyboardType: TextInputType.emailAddress,
+          decoration: const InputDecoration(labelText: 'Email'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Send reset link'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await ref
+          .read(authRepositoryProvider)
+          .sendPasswordResetEmail(emailController.text.trim());
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Password reset email sent.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString())),
+        );
+      }
+    }
+  }
+
   Future<void> _submit() async {
     final config = ref.read(appConfigProvider);
     setState(() => _submitting = true);
@@ -134,6 +177,11 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
                               : "Don't have an account? Sign up",
                         ),
                       ),
+                      if (!_isSignUp)
+                        TextButton(
+                          onPressed: _forgotPassword,
+                          child: const Text('Forgot password?'),
+                        ),
                     ],
                   ],
                 ),

@@ -13,7 +13,7 @@ void main() {
     await tester.pumpWidget(const ProviderScope(child: ExecutiveTrainerApp()));
     await tester.pumpAndSettle();
 
-    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Sign in'), findsOneWidget);
     expect(
       find.textContaining('Train the way executives communicate'),
       findsOneWidget,

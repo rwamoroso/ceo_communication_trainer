@@ -4,6 +4,7 @@ import 'package:ceo_communication_trainer/core/ui/shell_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
@@ -34,6 +35,46 @@ class ProfileScreen extends ConsumerWidget {
               Text('Weekly goal: ${profile.weeklyGoalCount} sessions'),
               Text('Preferred mode: ${profile.preferredResponseMode.label}'),
               Text('Timezone: ${profile.timezone}'),
+              Text(
+                profile.dailyReminderTime.trim().isEmpty
+                    ? 'Daily reminder: Off'
+                    : 'Daily reminder: ${_formatReminderTime(profile.dailyReminderTime)}',
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  OutlinedButton(
+                    onPressed: () async {
+                      final initial = _parseReminderTime(
+                        profile.dailyReminderTime,
+                      );
+                      final picked = await showTimePicker(
+                        context: context,
+                        initialTime:
+                            initial ?? const TimeOfDay(hour: 8, minute: 0),
+                      );
+                      if (picked == null) return;
+                      final normalized =
+                          '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
+                      await ref
+                          .read(profileRepositoryProvider)
+                          .updateDailyReminderTime(normalized);
+                    },
+                    child: const Text('Set reminder time'),
+                  ),
+                  if (profile.dailyReminderTime.trim().isNotEmpty)
+                    OutlinedButton(
+                      onPressed: () async {
+                        await ref
+                            .read(profileRepositoryProvider)
+                            .updateDailyReminderTime(null);
+                      },
+                      child: const Text('Turn off reminder'),
+                    ),
+                ],
+              ),
               const SizedBox(height: 12),
               Wrap(
                 spacing: 10,
@@ -73,5 +114,26 @@ class ProfileScreen extends ConsumerWidget {
         ),
       ],
     );
+  }
+
+  TimeOfDay? _parseReminderTime(String value) {
+    final parts = value.split(':');
+    if (parts.length != 2) {
+      return null;
+    }
+    final hour = int.tryParse(parts[0]);
+    final minute = int.tryParse(parts[1]);
+    if (hour == null || minute == null) {
+      return null;
+    }
+    return TimeOfDay(hour: hour, minute: minute);
+  }
+
+  String _formatReminderTime(String value) {
+    final time = _parseReminderTime(value);
+    if (time == null) {
+      return value;
+    }
+    return DateFormat.jm().format(DateTime(2026, 1, 1, time.hour, time.minute));
   }
 }

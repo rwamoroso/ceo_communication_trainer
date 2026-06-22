@@ -19,4 +19,6 @@ abstract class ProfileRepository {
     required bool microphoneConsent,
     required ResponseMode preferredResponseMode,
   });
+
+  Future<void> updateDailyReminderTime(String? dailyReminderTime);
 }

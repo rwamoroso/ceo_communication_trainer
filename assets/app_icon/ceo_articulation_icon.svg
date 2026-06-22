@@ -1,0 +1,55 @@
+<svg viewBox="0 0 1024 1024" width="1024" height="1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="iconClip">
+      <rect x="0" y="0" width="1024" height="1024"/>
+    </clipPath>
+  </defs>
+
+  <!-- App icon background -->
+  <rect x="0" y="0" width="1024" height="1024" fill="#0B1929"/>
+
+  <!-- Subtle grid lines -->
+  <g clip-path="url(#iconClip)" opacity="0.06">
+    <line x1="0" y1="205" x2="1024" y2="205" stroke="#fff" stroke-width="1.5"/>
+    <line x1="0" y1="410" x2="1024" y2="410" stroke="#fff" stroke-width="1.5"/>
+    <line x1="0" y1="614" x2="1024" y2="614" stroke="#fff" stroke-width="1.5"/>
+    <line x1="0" y1="819" x2="1024" y2="819" stroke="#fff" stroke-width="1.5"/>
+    <line x1="205" y1="0" x2="205" y2="1024" stroke="#fff" stroke-width="1.5"/>
+    <line x1="410" y1="0" x2="410" y2="1024" stroke="#fff" stroke-width="1.5"/>
+    <line x1="614" y1="0" x2="614" y2="1024" stroke="#fff" stroke-width="1.5"/>
+    <line x1="819" y1="0" x2="819" y2="1024" stroke="#fff" stroke-width="1.5"/>
+  </g>
+
+  <!-- Speech bubble body -->
+  <rect x="132" y="185" width="760" height="480" rx="72" fill="#FFFFFF" opacity="0.97"/>
+
+  <!-- Speech bubble tail -->
+  <polygon points="240,662 130,820 460,662" fill="#FFFFFF" opacity="0.97"/>
+
+  <!-- Equalizer bars — crown silhouette -->
+  <!-- Bar 1 left — short -->
+  <rect x="178" y="450" width="90" height="168" rx="20" fill="#C8A84B"/>
+  <!-- Bar 2 — taller -->
+  <rect x="296" y="370" width="90" height="248" rx="20" fill="#E8C55A"/>
+  <!-- Bar 3 center — tallest -->
+  <rect x="414" y="280" width="90" height="338" rx="20" fill="#F5D76E"/>
+  <!-- Bar 4 — taller -->
+  <rect x="532" y="370" width="90" height="248" rx="20" fill="#E8C55A"/>
+  <!-- Bar 5 right — short -->
+  <rect x="650" y="450" width="90" height="168" rx="20" fill="#C8A84B"/>
+
+  <!-- Crown base band -->
+  <rect x="178" y="608" width="562" height="13" rx="6" fill="#B8921F" opacity="0.5"/>
+
+  <!-- Glow dot on center bar top -->
+  <circle cx="459" cy="272" r="20" fill="#FFF3B0" opacity="0.85"/>
+
+  <!-- Small mic in bubble tail -->
+  <circle cx="245" cy="815" r="36" fill="#1A3A5C" opacity="0.7"/>
+  <rect x="233" y="798" width="22" height="30" rx="11" fill="#F5D76E"/>
+  <path d="M226 824 Q226 844 245 844 Q264 844 264 824" fill="none" stroke="#F5D76E" stroke-width="4.5" stroke-linecap="round"/>
+  <line x1="245" y1="844" x2="245" y2="854" stroke="#F5D76E" stroke-width="4.5" stroke-linecap="round"/>
+
+  <!-- Wordmark -->
+  <text x="512" y="940" font-family="Georgia, serif" font-size="56" font-weight="700" fill="#8BA8C8" text-anchor="middle" letter-spacing="12" opacity="0.9">CEO</text>
+</svg>

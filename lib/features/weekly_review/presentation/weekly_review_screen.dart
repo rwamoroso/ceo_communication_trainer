@@ -3,6 +3,7 @@ import 'package:ceo_communication_trainer/core/types/app_types.dart';
 import 'package:ceo_communication_trainer/core/ui/shell_card.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 class WeeklyReviewScreen extends ConsumerWidget {
   const WeeklyReviewScreen({super.key});
@@ -11,7 +12,15 @@ class WeeklyReviewScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final recalibrations = ref.watch(recalibrationsProvider);
     final progress = ref.watch(progressSnapshotProvider);
+    final plan = ref.watch(currentPlanProvider);
     final theme = Theme.of(context);
+    final currentWeek = plan == null
+        ? 1
+        : (((DateTime.now().difference(plan.startDate).inDays) ~/ 7) + 1)
+            .clamp(1, 10);
+    final currentWeekPacket = ref.watch(
+      weeklyLessonPacketByWeekProvider(currentWeek),
+    );
 
     return Scaffold(
       appBar: AppBar(title: const Text('Weekly review')),
@@ -33,6 +42,20 @@ class WeeklyReviewScreen extends ConsumerWidget {
                         .generateWeeklyRecalibration();
                   },
                   child: const Text('Run recalibration'),
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: () => context.go('/plan/week/$currentWeek/setup'),
+                  child: Text(
+                    currentWeekPacket == null
+                        ? 'Set up week $currentWeek with AI'
+                        : 'Refresh week $currentWeek AI lesson pack',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton(
+                  onPressed: () => context.go('/home'),
+                  child: const Text('Return home'),
                 ),
               ],
             ),

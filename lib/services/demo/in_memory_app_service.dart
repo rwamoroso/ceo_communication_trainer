@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:collection';
 import 'dart:math';
 
@@ -7,7 +8,9 @@ import 'package:ceo_communication_trainer/features/auth/domain/auth_repository.d
 import 'package:ceo_communication_trainer/features/profile/domain/profile_repository.dart';
 import 'package:ceo_communication_trainer/features/progress/domain/progress_repository.dart';
 import 'package:ceo_communication_trainer/features/training_plan/domain/adaptive_engine.dart';
-import 'package:ceo_communication_trainer/features/training_session/domain/scoring_engine.dart';
+import 'package:ceo_communication_trainer/features/training_plan/domain/weekly_lesson_packet_engine.dart';
+import 'package:ceo_communication_trainer/features/training_session/domain/drill_guidance.dart';
+import 'package:ceo_communication_trainer/features/training_session/domain/session_evaluation_engine.dart';
 import 'package:ceo_communication_trainer/features/training_session/domain/training_repository.dart';
 import 'package:ceo_communication_trainer/services/app_service.dart';
 import 'package:ceo_communication_trainer/services/demo/prompt_seed.dart';
@@ -25,6 +28,7 @@ class InMemoryAppService extends AppService
   ProgressSnapshot? _progress;
   final List<TrainingSession> _sessions = [];
   final List<WeeklyRecalibration> _recalibrations = [];
+  final List<WeeklyLessonPacket> _weeklyLessonPackets = [];
 
   @override
   bool get isLoading => false;
@@ -58,6 +62,10 @@ class InMemoryAppService extends AppService
   @override
   List<WeeklyRecalibration> get recalibrations =>
       UnmodifiableListView(_recalibrations.reversed);
+
+  @override
+  List<WeeklyLessonPacket> get weeklyLessonPackets =>
+      UnmodifiableListView(_weeklyLessonPackets.reversed);
 
   @override
   DashboardSnapshot? get dashboard {
@@ -102,7 +110,11 @@ class InMemoryAppService extends AppService
   }
 
   @override
-  Future<void> signIn(String email, String password, {bool isSignUp = false}) async {
+  Future<void> signIn(
+    String email,
+    String password, {
+    bool isSignUp = false,
+  }) async {
     _currentUser = AppUser(
       id: 'user-${email.hashCode.abs()}',
       email: email.trim().toLowerCase(),
@@ -119,6 +131,7 @@ class InMemoryAppService extends AppService
       goals: const [],
       microphoneConsent: false,
       preferredResponseMode: ResponseMode.typed,
+      dailyReminderTime: '',
     );
     notifyListeners();
   }
@@ -132,8 +145,18 @@ class InMemoryAppService extends AppService
     _progress = null;
     _sessions.clear();
     _recalibrations.clear();
+    _weeklyLessonPackets.clear();
     notifyListeners();
   }
+
+  @override
+  bool get isInPasswordRecovery => false;
+
+  @override
+  Future<void> sendPasswordResetEmail(String email) async {}
+
+  @override
+  Future<void> updatePassword(String newPassword) async {}
 
   @override
   Future<void> saveProfile({
@@ -160,6 +183,7 @@ class InMemoryAppService extends AppService
                   goals: const [],
                   microphoneConsent: false,
                   preferredResponseMode: ResponseMode.typed,
+                  dailyReminderTime: '',
                 ))
             .copyWith(
               displayName: displayName,
@@ -189,6 +213,16 @@ class InMemoryAppService extends AppService
       microphoneConsent: microphoneConsent,
       preferredResponseMode: preferredResponseMode,
       onboardingCompletedAt: DateTime.now(),
+    );
+    notifyListeners();
+  }
+
+  @override
+  Future<void> updateDailyReminderTime(String? dailyReminderTime) async {
+    final profile = _profile;
+    if (profile == null) return;
+    _profile = profile.copyWith(
+      dailyReminderTime: (dailyReminderTime ?? '').trim(),
     );
     notifyListeners();
   }
@@ -227,8 +261,16 @@ class InMemoryAppService extends AppService
     final planItem = _currentPlan?.currentVersion.items.firstWhere(
       (item) => item.id == planItemId,
     );
+    if (planItem == null) {
+      throw StateError('Plan item not found.');
+    }
+    if (weeklyLessonPacketForWeek(planItem.weekNumber) == null) {
+      throw StateError(
+        'Week ${planItem.weekNumber} requires an imported AI lesson packet before drills can start.',
+      );
+    }
     final prompt = promptLibrary.firstWhere(
-      (item) => item.id == planItem!.promptId,
+      (item) => item.id == planItem.promptId,
     );
     return _createSession(
       prompt: prompt,
@@ -240,6 +282,35 @@ class InMemoryAppService extends AppService
   @override
   Future<TrainingSession> openRetrySession(String sessionId) async {
     return _sessions.firstWhere((session) => session.id == sessionId);
+  }
+
+  @override
+  WeeklyLessonPacket? weeklyLessonPacketForWeek(int weekNumber) {
+    return _weeklyLessonPackets
+        .where(
+          (packet) =>
+              _currentPlan != null &&
+              packet.planVersionId == _currentPlan!.currentVersion.id &&
+              packet.weekNumber == weekNumber,
+        )
+        .firstOrNull;
+  }
+
+  @override
+  WeeklyDrillLesson? weeklyLessonForPlanItem(String planItemId) {
+    final plan = _currentPlan;
+    if (plan == null) {
+      return null;
+    }
+    final item = plan.currentVersion.items
+        .where((entry) => entry.id == planItemId)
+        .firstOrNull;
+    if (item == null) {
+      return null;
+    }
+    return weeklyLessonPacketForWeek(
+      item.weekNumber,
+    )?.lessonForPlanItem(planItemId);
   }
 
   TrainingSession _createSession({
@@ -274,6 +345,16 @@ class InMemoryAppService extends AppService
       throw StateError('Session not found.');
     }
     final session = _sessions[index];
+    if (session.attempts.length >= 2) {
+      throw StateError(
+        'This session already has two attempts. Open feedback and finish the session.',
+      );
+    }
+    if (session.attempts.length > session.reviews.length) {
+      throw StateError(
+        'Import AI coaching for the latest attempt before submitting another response.',
+      );
+    }
     final nextAttemptNo = session.attempts.length + 1;
     final wordCount = _wordCount(responseText);
     final estimatedDuration = max(
@@ -289,18 +370,58 @@ class InMemoryAppService extends AppService
       wordCount: wordCount,
       submittedAt: DateTime.now(),
     );
-    final scored = ScoringEngine.evaluate(
-      prompt: session.prompt,
-      responseText: responseText,
-      responseMode: responseMode,
-      previousAttempt: session.attempts.isEmpty ? null : session.attempts.last,
-    );
+    final updated = session.copyWith(attempts: [...session.attempts, attempt]);
+    _sessions[index] = updated;
+    notifyListeners();
+    return updated;
+  }
 
+  @override
+  Future<String> buildSessionEvaluationPrompt(String sessionId) async {
+    final session = _sessions.firstWhere(
+      (entry) => entry.id == sessionId,
+      orElse: () => throw StateError('Session not found.'),
+    );
+    if (session.attempts.isEmpty) {
+      throw StateError('Submit a response before requesting coaching.');
+    }
+    if (session.reviews.length >= session.attempts.length) {
+      throw StateError(
+        'The latest attempt already has coaching. Retry the session to generate a new prompt.',
+      );
+    }
+
+    return SessionEvaluationEngine.buildPrompt(
+      input: _buildAttemptEvaluationPayload(session),
+    );
+  }
+
+  @override
+  Future<TrainingSession> importSessionEvaluation({
+    required String sessionId,
+    required String rawJson,
+  }) async {
+    final index = _sessions.indexWhere((session) => session.id == sessionId);
+    if (index == -1) {
+      throw StateError('Session not found.');
+    }
+    final session = _sessions[index];
+    if (session.attempts.isEmpty) {
+      throw StateError('Submit a response before importing coaching.');
+    }
+    if (session.reviews.length >= session.attempts.length) {
+      throw StateError('This attempt already has imported coaching.');
+    }
+
+    final parsed = SessionEvaluationEngine.parseImport(rawJson: rawJson);
+    _applyNextDayDrillUpdate(parsed.nextDayDrillUpdate);
     final updated = session.copyWith(
-      attempts: [...session.attempts, attempt],
       reviews: [
         ...session.reviews,
-        AttemptReview(score: scored.score, feedback: scored.feedback),
+        AttemptReview(
+          score: parsed.scoredAttempt.score,
+          feedback: parsed.scoredAttempt.feedback,
+        ),
       ],
     );
     _sessions[index] = updated;
@@ -314,7 +435,12 @@ class InMemoryAppService extends AppService
     if (index == -1) return;
 
     final session = _sessions[index];
-    if (session.reviews.isEmpty) return;
+    if (session.reviews.isEmpty ||
+        session.attempts.length > session.reviews.length) {
+      throw StateError(
+        'Import AI coaching for the latest attempt before finishing this session.',
+      );
+    }
 
     final bestReview = session.reviews.reduce(
       (current, next) => current.score.overallScore >= next.score.overallScore
@@ -581,6 +707,406 @@ class InMemoryAppService extends AppService
     notifyListeners();
     return recalibration;
   }
+
+  @override
+  Future<String> buildWeeklyLessonPrompt(int weekNumber) async {
+    final plan = _currentPlan;
+    final baseline = _baselineSummary;
+    if (plan == null || baseline == null) {
+      throw StateError('A completed baseline and active plan are required.');
+    }
+    return WeeklyLessonPacketEngine.buildPrompt(
+      weekNumber: weekNumber,
+      plan: plan,
+      baseline: baseline,
+      progress: _progress,
+      sessions: _sessions,
+    );
+  }
+
+  @override
+  Future<WeeklyLessonPacket> generateWeeklyLessonPacket(int weekNumber) async {
+    final plan = _currentPlan;
+    if (plan == null) {
+      throw StateError('An active plan is required.');
+    }
+
+    final weekItems = plan.currentVersion.items
+        .where((item) => item.weekNumber == weekNumber)
+        .toList();
+    if (weekItems.isEmpty) {
+      throw StateError(
+        'Week $weekNumber is not available in the current plan.',
+      );
+    }
+
+    final drills = <WeeklyDrillLesson>[];
+    for (final item in weekItems) {
+      final prompt = promptLibrary.firstWhere(
+        (entry) => entry.id == item.promptId,
+      );
+      drills.add(
+        WeeklyDrillLesson(
+          planItemId: item.id,
+          lessonTitle: 'Lead with the recommendation',
+          lessonBody:
+              'State the answer in the first sentence, then support it with crisp business logic.',
+          goodExample:
+              'My recommendation is to narrow scope this week so we protect quality, reduce rework, and keep leadership trust intact.',
+          exampleAnalysis:
+              'It answers immediately, stays structured, and links the recommendation to business outcomes.',
+          userDevelopmentFocus:
+              'Keep the opening direct and avoid a long setup before the recommendation.',
+          preDrillChecklist: const [
+            'Lead with the answer',
+            'Use no more than three supporting points',
+            'End with a concrete next step',
+          ],
+          drillPurpose: DrillGuidance.purposeFor(prompt: prompt),
+          successSignals: DrillGuidance.successSignalsFor(prompt: prompt),
+          aiScenarioContext: prompt.scenarioContext,
+          aiPromptText: prompt.promptText,
+        ),
+      );
+    }
+
+    final packet = WeeklyLessonPacket(
+      id: 'lesson-$weekNumber-${DateTime.now().millisecondsSinceEpoch}',
+      planVersionId: plan.currentVersion.id,
+      weekNumber: weekNumber,
+      weeklyObjective:
+          'Build a faster answer-first habit across this week\'s drills.',
+      developmentSummary:
+          'This week reinforces concise recommendations, cleaner structure, and stronger executive tone.',
+      rawImportText: '',
+      drills: drills,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+
+    _weeklyLessonPackets.removeWhere(
+      (entry) =>
+          entry.planVersionId == packet.planVersionId &&
+          entry.weekNumber == packet.weekNumber,
+    );
+    _weeklyLessonPackets.add(packet);
+    notifyListeners();
+    return packet;
+  }
+
+  @override
+  Future<WeeklyLessonPacket> importWeeklyLessonPacket({
+    required int weekNumber,
+    required String rawJson,
+  }) async {
+    final plan = _currentPlan;
+    if (plan == null) {
+      throw StateError('An active plan is required.');
+    }
+
+    final weekItems = plan.currentVersion.items
+        .where((item) => item.weekNumber == weekNumber)
+        .toList();
+    final validated = WeeklyLessonPacketEngine.parseImport(
+      expectedWeekNumber: weekNumber,
+      weekItems: weekItems,
+      rawJson: rawJson,
+    );
+
+    final existing = weeklyLessonPacketForWeek(weekNumber);
+    final packet = WeeklyLessonPacket(
+      id:
+          existing?.id ??
+          'lesson-$weekNumber-${DateTime.now().millisecondsSinceEpoch}',
+      planVersionId: plan.currentVersion.id,
+      weekNumber: validated.weekNumber,
+      weeklyObjective: validated.weeklyObjective,
+      developmentSummary: validated.developmentSummary,
+      rawImportText: validated.rawImportText,
+      drills: validated.drills,
+      createdAt: existing?.createdAt ?? DateTime.now(),
+      updatedAt: DateTime.now(),
+      previousWeekAnalysis: validated.previousWeekAnalysis,
+      previousWeekEvaluations: validated.previousWeekEvaluations,
+    );
+
+    _weeklyLessonPackets.removeWhere(
+      (entry) =>
+          entry.planVersionId == packet.planVersionId &&
+          entry.weekNumber == packet.weekNumber,
+    );
+    _weeklyLessonPackets.add(packet);
+    notifyListeners();
+    return packet;
+  }
+
+  Map<String, dynamic> _buildAttemptEvaluationPayload(TrainingSession session) {
+    final pendingAttempt = session.attempts.last;
+    final lesson = session.planItemId == null
+        ? null
+        : weeklyLessonForPlanItem(session.planItemId!);
+    final planItem = session.planItemId == null || _currentPlan == null
+        ? null
+        : _currentPlan!.currentVersion.items
+              .where((item) => item.id == session.planItemId)
+              .firstOrNull;
+    final weeklyPacket = planItem == null
+        ? null
+        : weeklyLessonPacketForWeek(planItem.weekNumber);
+    final previousAttempt = session.attempts.length > 1
+        ? session.attempts[session.attempts.length - 2]
+        : null;
+    final previousReview = session.reviews.isEmpty
+        ? null
+        : session.reviews.last;
+    final nextPlanItem = _nextPlanItemForSession(session);
+    final nextLesson = nextPlanItem == null
+        ? null
+        : weeklyLessonForPlanItem(nextPlanItem.id);
+
+    return {
+      'schema_version': 'manual-ai-eval-v1',
+      'session': {
+        'session_id': session.id,
+        'plan_item_id': session.planItemId,
+        'origin': session.origin.name,
+        'attempt_number': pendingAttempt.attemptNo,
+        'response_mode': pendingAttempt.responseMode.name,
+      },
+      'user_profile': _profile == null
+          ? null
+          : {
+              'display_name': _profile!.displayName,
+              'role_title': _profile!.roleTitle,
+              'seniority_band': _profile!.seniorityBand.name,
+              'industry': _profile!.industry,
+              'timezone': _profile!.timezone,
+              'communication_contexts': _profile!.communicationContexts,
+              'goals': _profile!.goals,
+            },
+      'prompt': {
+        'id': session.prompt.id,
+        'slug': session.prompt.slug,
+        'title': session.prompt.title,
+        'category': session.prompt.category.code,
+        'scenario_context': session.prompt.scenarioContext,
+        'prompt_text': lesson?.aiPromptText ?? session.prompt.promptText,
+        'difficulty_tier': session.prompt.difficultyTier,
+        'target_duration_sec': session.prompt.targetDurationSec,
+        'target_word_range_min': session.prompt.targetWordRangeMin,
+        'target_word_range_max': session.prompt.targetWordRangeMax,
+        'pillar_weights': {
+          for (final entry in session.prompt.pillarWeights.entries)
+            entry.key.name: entry.value,
+        },
+        'behavior_targets': session.prompt.behaviorTargets,
+      },
+      'weekly_lesson': weeklyPacket == null
+          ? null
+          : {
+              'weekly_objective': weeklyPacket.weeklyObjective,
+              'development_summary': weeklyPacket.developmentSummary,
+              'lesson_title': lesson?.lessonTitle ?? '',
+              'lesson_body': lesson?.lessonBody ?? '',
+              'good_example': lesson?.goodExample ?? '',
+              'example_analysis': lesson?.exampleAnalysis ?? '',
+              'user_development_focus': lesson?.userDevelopmentFocus ?? '',
+              'pre_drill_checklist':
+                  lesson?.preDrillChecklist ?? const <String>[],
+              'drill_purpose': DrillGuidance.purposeFor(
+                prompt: session.prompt,
+                lesson: lesson,
+              ),
+              'success_signals': DrillGuidance.successSignalsFor(
+                prompt: session.prompt,
+                lesson: lesson,
+              ),
+              'ai_scenario_context':
+                  lesson?.aiScenarioContext ?? session.prompt.scenarioContext,
+              'ai_prompt_text':
+                  lesson?.aiPromptText ?? session.prompt.promptText,
+            },
+      'user_response': {
+        'response_text': pendingAttempt.responseText,
+        'word_count': pendingAttempt.wordCount,
+        'estimated_duration_seconds': pendingAttempt.durationSeconds,
+      },
+      'previous_attempt': previousAttempt == null || previousReview == null
+          ? null
+          : {
+              'response_text': previousAttempt.responseText,
+              'overall_score': previousReview.score.overallScore,
+              'biggest_issue': previousReview.feedback.biggestIssue,
+              'top_coaching_points': previousReview.feedback.topCoachingPoints,
+              'next_attempt_target': previousReview.feedback.nextAttemptTarget,
+            },
+      'next_scheduled_drill': nextPlanItem == null
+          ? null
+          : {
+              'plan_item_id': nextPlanItem.id,
+              'scheduled_for': nextPlanItem.scheduledFor.toIso8601String(),
+              'drill_type': nextPlanItem.drillType,
+              'user_development_focus': nextLesson?.userDevelopmentFocus ?? '',
+              'drill_purpose': nextLesson?.drillPurpose ?? '',
+              'success_signals': nextLesson?.successSignals ?? const <String>[],
+              'pre_drill_checklist':
+                  nextLesson?.preDrillChecklist ?? const <String>[],
+              'ai_scenario_context': nextLesson?.aiScenarioContext ?? '',
+              'ai_prompt_text': nextLesson?.aiPromptText ?? '',
+            },
+      'recent_same_topic_history': [
+        for (final candidate
+            in _sessions
+                .where(
+                  (entry) =>
+                      entry.id != session.id &&
+                      entry.reviews.isNotEmpty &&
+                      entry.prompt.category == session.prompt.category,
+                )
+                .take(4))
+          {
+            'session_id': candidate.id,
+            'prompt_title': candidate.prompt.title,
+            'response_text': candidate.attempts.isEmpty
+                ? ''
+                : candidate.attempts.last.responseText,
+            'overall_score': candidate.reviews.last.score.overallScore,
+            'biggest_issue': candidate.reviews.last.feedback.biggestIssue,
+            'next_attempt_target':
+                candidate.reviews.last.feedback.nextAttemptTarget,
+          },
+      ],
+      'progress': _progress == null
+          ? null
+          : {
+              'current_level': _progress!.currentLevel.label,
+              'overall_score_ema': _progress!.overallScoreEma,
+              'readiness_score': _progress!.readinessScore,
+              'weekly_completion_rate': _progress!.weeklyCompletionRate,
+              'coaching_adoption_rate': _progress!.coachingAdoptionRate,
+              'difficulty_tolerance': _progress!.difficultyTolerance,
+              'missed_sessions': _progress!.missedSessions,
+            },
+    };
+  }
+
+  PlanItem? _nextPlanItemForSession(TrainingSession session) {
+    if (session.planItemId == null || _currentPlan == null) {
+      return null;
+    }
+
+    final sorted = [..._currentPlan!.currentVersion.items]
+      ..sort((a, b) {
+        final weekCompare = a.weekNumber.compareTo(b.weekNumber);
+        if (weekCompare != 0) {
+          return weekCompare;
+        }
+        final dayCompare = a.dayNumber.compareTo(b.dayNumber);
+        if (dayCompare != 0) {
+          return dayCompare;
+        }
+        return a.sequenceNumber.compareTo(b.sequenceNumber);
+      });
+    final currentIndex = sorted.indexWhere(
+      (item) => item.id == session.planItemId,
+    );
+    if (currentIndex == -1) {
+      return null;
+    }
+
+    for (var index = currentIndex + 1; index < sorted.length; index++) {
+      final candidate = sorted[index];
+      if (candidate.status == PlanItemStatus.scheduled) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  void _applyNextDayDrillUpdate(NextDayDrillUpdate? update) {
+    if (update == null) {
+      return;
+    }
+
+    for (var index = 0; index < _weeklyLessonPackets.length; index++) {
+      final packet = _weeklyLessonPackets[index];
+      final lessonIndex = packet.drills.indexWhere(
+        (lesson) => lesson.planItemId == update.planItemId,
+      );
+      if (lessonIndex == -1) {
+        continue;
+      }
+
+      final lesson = packet.drills[lessonIndex];
+      final updatedLesson = lesson.copyWith(
+        userDevelopmentFocus:
+            _nonEmptyOrNull(update.userDevelopmentFocus) ??
+            lesson.userDevelopmentFocus,
+        drillPurpose:
+            _nonEmptyOrNull(update.drillPurpose) ?? lesson.drillPurpose,
+        successSignals: update.successSignals ?? lesson.successSignals,
+        preDrillChecklist: update.preDrillChecklist ?? lesson.preDrillChecklist,
+        aiScenarioContext:
+            _nonEmptyOrNull(update.aiScenarioContext) ??
+            lesson.aiScenarioContext,
+        aiPromptText:
+            _nonEmptyOrNull(update.aiPromptText) ?? lesson.aiPromptText,
+      );
+      final updatedDrills = [...packet.drills];
+      updatedDrills[lessonIndex] = updatedLesson;
+      final updatedPacket = packet.copyWith(
+        drills: updatedDrills,
+        rawImportText: _packetRawJson(packet.copyWith(drills: updatedDrills)),
+        updatedAt: DateTime.now(),
+      );
+      _weeklyLessonPackets[index] = updatedPacket;
+      return;
+    }
+  }
+
+  String _packetRawJson(WeeklyLessonPacket packet) {
+    final payload = {
+      'week_number': packet.weekNumber,
+      'weekly_objective': packet.weeklyObjective,
+      'development_summary': packet.developmentSummary,
+      'previous_week_analysis': packet.previousWeekAnalysis,
+      'previous_week_evaluations': [
+        for (final evaluation in packet.previousWeekEvaluations)
+          {
+            'session_id': evaluation.sessionId,
+            'ai_score': evaluation.aiScore,
+            'key_observations': evaluation.keyObservations,
+          },
+      ],
+      'drills': [
+        for (final lesson in packet.drills)
+          {
+            'plan_item_id': lesson.planItemId,
+            'lesson_title': lesson.lessonTitle,
+            'lesson_body': lesson.lessonBody,
+            'good_example': lesson.goodExample,
+            'example_analysis': lesson.exampleAnalysis,
+            'user_development_focus': lesson.userDevelopmentFocus,
+            'pre_drill_checklist': lesson.preDrillChecklist,
+            'drill_purpose': lesson.drillPurpose,
+            'success_signals': lesson.successSignals,
+            if (lesson.aiScenarioContext != null)
+              'ai_scenario_context': lesson.aiScenarioContext,
+            if (lesson.aiPromptText != null)
+              'ai_prompt_text': lesson.aiPromptText,
+          },
+      ],
+    };
+    return const JsonEncoder.withIndent('  ').convert(payload);
+  }
+
+  String? _nonEmptyOrNull(String? value) {
+    final trimmed = value?.trim() ?? '';
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  @override
+  Future<void> reload() async {}
 
   double _coachingAdoptionRate() {
     final completed = _sessions.where(
